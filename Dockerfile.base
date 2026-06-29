@@ -1,0 +1,93 @@
+# Copyright (c) 2020 The Regents of the University of California
+# All Rights Reserved.
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions are
+# met: redistributions of source code must retain the above copyright
+# notice, this list of conditions and the following disclaimer;
+# redistributions in binary form must reproduce the above copyright
+# notice, this list of conditions and the following disclaimer in the
+# documentation and/or other materials provided with the distribution;
+# neither the name of the copyright holders nor the names of its
+# contributors may be used to endorse or promote products derived from
+# this software without specific prior written permission.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+# "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+# LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+# A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+# OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+# SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+# LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+# DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+# THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+# (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ARG PYTORCH_IMAGE=pytorch/pytorch:2.2.0-cuda12.1-cudnn8-runtime
+FROM ${PYTORCH_IMAGE}
+
+# Copied from Gem5 Docker file
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt -y update && \
+    apt -y install build-essential git m4 zlib1g zlib1g-dev \
+    libprotobuf-dev protobuf-compiler libprotoc-dev libgoogle-perftools-dev \
+    python3-dev python-is-python3 libboost-all-dev \
+    libhdf5-serial-dev python3-pydot libpng-dev libelf-dev pkg-config pip \
+    python3-venv black libssl-dev libasan5 libubsan1 curl device-tree-compiler wget ninja-build && \
+    pip install onnx matplotlib scikit-learn pydot tabulate flash_attn && pip install --user conan==1.56.0 cmake==3.26.4 && rm -rf /var/lib/apt/lists/*
+
+# Download RISC-V tool chain
+RUN wget https://github.com/riscv-collab/riscv-gnu-toolchain/releases/download/2023.12.14/riscv64-glibc-ubuntu-22.04-llvm-nightly-2023.12.14-nightly.tar.gz && \
+    wget https://github.com/riscv-collab/riscv-gnu-toolchain/releases/download/2023.12.14/riscv64-elf-ubuntu-20.04-llvm-nightly-2023.12.14-nightly.tar.gz && \
+    tar -zxvf riscv64-elf-ubuntu-20.04-llvm-nightly-2023.12.14-nightly.tar.gz && tar -zxvf riscv64-elf-ubuntu-20.04-llvm-nightly-2023.12.14-nightly.tar.gz && \
+    rm *.tar.gz
+
+# Install torchsim dependency
+RUN apt install ninja-build && pip install onnx matplotlib && pip install --user conan==1.56.0 && pip install "transformers<4.44" && pip install diffusers==0.34.0
+
+# FlashAttention
+RUN python -m pip install --no-build-isolation flash-attn
+
+# Extra Python deps for YOLO/vision tests
+RUN python -m pip install -U pip setuptools wheel && \
+    python -m pip install --no-cache-dir --no-deps ultralytics && \
+    python -m pip install --no-cache-dir opencv-python-headless pandas seaborn
+
+ENV RISCV=/workspace/riscv
+ENV PATH=$RISCV/bin:$PATH
+
+ARG GEM5_ASSET_ID
+ARG LLVM_ASSET_ID
+ARG SPIKE_ASSET_ID
+ENV PATH=$PATH:/root/.local/bin
+ENV LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/opt/conda/lib:/usr/local/nvidia/lib:/usr/local/nvidia/lib64:$LD_LIBRARY_PATH
+
+# Download GEM5 for torchsim
+RUN curl -L -H "Accept: application/octet-stream" https://api.github.com/repos/PSAL-POSTECH/gem5/releases/assets/${GEM5_ASSET_ID} -o /tmp/gem5-release.tar.gz && \
+    mkdir -p /gem5 && \
+    tar -xzf /tmp/gem5-release.tar.gz -C /gem5 && \
+    rm /tmp/gem5-release.tar.gz
+ENV GEM5_PATH=/gem5/release/gem5.opt
+
+# Download LLVM RISC-V for torchsim
+RUN curl -L -H "Accept: application/octet-stream" https://api.github.com/repos/PSAL-POSTECH/llvm-project/releases/assets/${LLVM_ASSET_ID} -o /tmp/riscv-llvm-release.tar.gz && \
+    tar -xzf /tmp/riscv-llvm-release.tar.gz -C / && \
+    rm /tmp/riscv-llvm-release.tar.gz
+
+# Store RISC-V LLVM for TorchSim
+ENV TORCHSIM_LLVM_PATH=/riscv-llvm/bin
+ENV TORCHSIM_DIR=/workspace/PyTorchSim
+
+# Download Spike simulator
+RUN curl -L -H "Accept: application/octet-stream" https://api.github.com/repos/PSAL-POSTECH/riscv-isa-sim/releases/assets/${SPIKE_ASSET_ID} -o /tmp/spike-release.tar.gz && \
+    tar -xzf /tmp/spike-release.tar.gz -C / && rm /tmp/spike-release.tar.gz
+
+# Store SPIKE for TorchSim
+ENV PATH="/release/bin:${PATH}"
+ENV LD_LIBRARY_PATH="/release/lib:${LD_LIBRARY_PATH}"
+ENV C_INCLUDE_PATH="/release/include:${C_INCLUDE_PATH}"
+
+# Install Proxy kernel
+RUN git clone https://github.com/riscv-software-src/riscv-pk.git && \
+     cd riscv-pk && git checkout 4f3debe4d04f56d31089c1c716a27e2d5245e9a1 && mkdir build && cd build && \
+    ../configure --prefix=$RISCV --host=riscv64-unknown-elf && make -j && make install

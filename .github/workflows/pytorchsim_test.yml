@@ -1,0 +1,742 @@
+name: PyTorchSim Tests
+
+on:
+  workflow_call:
+    inputs:
+      image_name:
+        required: true
+        type: string
+      vector_lane:
+        description: "Vector lane size (use empty string for server TPU)"
+        required: true
+        type: number
+      spad_size:
+        description: "SPAD size (use empty string for server TPU)"
+        required: true
+        type: number
+
+jobs:
+  test_add:
+    name: Run test_add.py
+    runs-on: self-hosted
+    steps:
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run test_add.py
+        run: |
+          echo "Running test_add.py"
+          docker run --rm \
+            -e vpu_num_lanes="${{ inputs.vector_lane }}" \
+            -e vpu_spad_size_kb_per_lane="${{ inputs.spad_size }}" \
+            ${{ inputs.image_name }} python3 PyTorchSim/tests/test_add.py
+
+  test_transcendental:
+    name: Run test_transcendental.py
+    runs-on: self-hosted
+    steps:
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run test_add.py
+        run: |
+          echo "Running test_transcendental.py"
+          docker run --rm \
+            -e vpu_num_lanes="${{ inputs.vector_lane }}" \
+            -e vpu_spad_size_kb_per_lane="${{ inputs.spad_size }}" \
+            ${{ inputs.image_name }} python3 PyTorchSim/tests/test_transcendental.py
+
+  test_activation:
+    name: Run test_activation.py
+    runs-on: self-hosted
+    steps:
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run test_activation.py
+        run: |
+          echo "Running test_activation.py"
+          docker run --rm \
+            -e vpu_num_lanes="${{ inputs.vector_lane }}" \
+            -e vpu_spad_size_kb_per_lane="${{ inputs.spad_size }}" \
+            ${{ inputs.image_name }} python3 PyTorchSim/tests/test_activation.py
+
+  test_batchnorm:
+    name: Run test_batchnorm.py
+    runs-on: self-hosted
+    steps:
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run test_batchnorm.py
+        run: |
+          echo "Running test_batchnorm.py"
+          docker run --rm \
+            -e vpu_num_lanes="${{ inputs.vector_lane }}" \
+            -e vpu_spad_size_kb_per_lane="${{ inputs.spad_size }}" \
+            ${{ inputs.image_name }} python3 PyTorchSim/tests/test_batchnorm.py
+
+  test_bmm:
+    name: Run test_bmm.py
+    runs-on: self-hosted
+    steps:
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run test_bmm.py
+        run: |
+          echo "Running test_bmm.py"
+          docker run --rm \
+            -e vpu_num_lanes="${{ inputs.vector_lane }}" \
+            -e vpu_spad_size_kb_per_lane="${{ inputs.spad_size }}" \
+            ${{ inputs.image_name }} python3 PyTorchSim/tests/test_bmm.py
+
+  test_cnn:
+    name: Run test_cnn.py
+    runs-on: self-hosted
+    steps:
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run test_cnn.py
+        run: |
+          echo "Running test_cnn.py"
+          docker run --rm \
+            -e vpu_num_lanes="${{ inputs.vector_lane }}" \
+            -e vpu_spad_size_kb_per_lane="${{ inputs.spad_size }}" \
+            ${{ inputs.image_name }} python3 PyTorchSim/tests/test_cnn.py
+
+  test_conv2d:
+    name: Run test_conv2d.py
+    runs-on: self-hosted
+    steps:
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run test_conv2d.py
+        run: |
+          echo "Running test_conv2d.py"
+          docker run --rm \
+            -e vpu_num_lanes="${{ inputs.vector_lane }}" \
+            -e vpu_spad_size_kb_per_lane="${{ inputs.spad_size }}" \
+            ${{ inputs.image_name }} python3 PyTorchSim/tests/test_conv2d.py
+
+  test_cat:
+    name: Run test_cat.py
+    runs-on: self-hosted
+    steps:
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run test_cat.py
+        run: |
+          echo "Running test_cat.py"
+          docker run --rm \
+            -e vpu_num_lanes="${{ inputs.vector_lane }}" \
+            -e vpu_spad_size_kb_per_lane="${{ inputs.spad_size }}" \
+            ${{ inputs.image_name }} python3 PyTorchSim/tests/test_cat.py
+
+  test_matmul:
+    name: Run test_matmul.py
+    runs-on: self-hosted
+    steps:
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run test_matmul.py
+        run: |
+          echo "Running test_matmul.py"
+          docker run --rm \
+            -e vpu_num_lanes="${{ inputs.vector_lane }}" \
+            -e vpu_spad_size_kb_per_lane="${{ inputs.spad_size }}" \
+            ${{ inputs.image_name }} python3 PyTorchSim/tests/test_matmul.py
+
+  test_reduce:
+    name: Run test_reduce.py
+    runs-on: self-hosted
+    steps:
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run test_reduce.py
+        run: |
+          echo "Running test_reduce.py"
+          docker run --rm \
+            -e vpu_num_lanes="${{ inputs.vector_lane }}" \
+            -e vpu_spad_size_kb_per_lane="${{ inputs.spad_size }}" \
+            ${{ inputs.image_name }} python3 PyTorchSim/tests/test_reduce.py
+
+  test_softmax:
+    name: Run test_softmax.py
+    runs-on: self-hosted
+    steps:
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run test_softmax.py
+        run: |
+          echo "Running test_softmax.py"
+          docker run --rm \
+            -e vpu_num_lanes="${{ inputs.vector_lane }}" \
+            -e vpu_spad_size_kb_per_lane="${{ inputs.spad_size }}" \
+            ${{ inputs.image_name }} python3 PyTorchSim/tests/test_softmax.py
+
+  test_transpose2D:
+    name: Run test_transpose2D.py
+    runs-on: self-hosted
+    steps:
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run test_transpose2D.py
+        run: |
+          echo "Running test_transpose2D.py"
+          docker run --rm \
+            -e vpu_num_lanes="${{ inputs.vector_lane }}" \
+            -e vpu_spad_size_kb_per_lane="${{ inputs.spad_size }}" \
+            ${{ inputs.image_name }} python3 PyTorchSim/tests/test_transpose2D.py
+
+  test_view3D_2D:
+    name: Run test_view3D_2D.py
+    runs-on: self-hosted
+    steps:
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run test_view3D_2D.py
+        run: |
+          echo "Running test_view3D_2D.py"
+          docker run --rm \
+            -e vpu_num_lanes="${{ inputs.vector_lane }}" \
+            -e vpu_spad_size_kb_per_lane="${{ inputs.spad_size }}" \
+            ${{ inputs.image_name }} python3 PyTorchSim/tests/test_view3D_2D.py
+
+  test_layernorm:
+    name: Run test_layernorm.py
+    runs-on: self-hosted
+    steps:
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run test_layernorm.py
+        run: |
+          echo "Running test_layernorm.py"
+          docker run --rm \
+            -e vpu_num_lanes="${{ inputs.vector_lane }}" \
+            -e vpu_spad_size_kb_per_lane="${{ inputs.spad_size }}" \
+            ${{ inputs.image_name }} python3 PyTorchSim/tests/test_layernorm.py
+
+  test_mlp:
+    name: Run test_mlp.py
+    runs-on: self-hosted
+    steps:
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run test_mlp.py
+        run: |
+          echo "Running test_mlp.py"
+          docker run --rm \
+            -e vpu_num_lanes="${{ inputs.vector_lane }}" \
+            -e vpu_spad_size_kb_per_lane="${{ inputs.spad_size }}" \
+            ${{ inputs.image_name }} python3 PyTorchSim/tests/test_mlp.py
+
+  test_resnet:
+    name: Run test_resnet.py
+    runs-on: self-hosted
+    steps:
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run test_resnet18.py
+        run: |
+          echo "Running test_resnet.py"
+          docker run --rm \
+            -e vpu_num_lanes="${{ inputs.vector_lane }}" \
+            -e vpu_spad_size_kb_per_lane="${{ inputs.spad_size }}" \
+            ${{ inputs.image_name }} python3 PyTorchSim/tests/test_resnet.py
+
+      - name: Run test_resnet50.py
+        run: |
+          echo "Running test_resnet.py"
+          docker run --rm \
+            -e vpu_num_lanes="${{ inputs.vector_lane }}" \
+            -e vpu_spad_size_kb_per_lane="${{ inputs.spad_size }}" \
+            ${{ inputs.image_name }} python3 PyTorchSim/tests/test_resnet.py --model_type resnet50
+
+  test_mobilenet:
+    name: Run test_mobilenet.py
+    runs-on: self-hosted
+    steps:
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run test_mobilenet.py
+        run: |
+          echo "Running test_mobilenet.py"
+          docker run --rm \
+            -e vpu_num_lanes="${{ inputs.vector_lane }}" \
+            -e vpu_spad_size_kb_per_lane="${{ inputs.spad_size }}" \
+            ${{ inputs.image_name }} python3 PyTorchSim/tests/MobileNet/test_mobilenet.py
+
+  test_transformer:
+    name: Run test_transformer.py
+    runs-on: self-hosted
+    steps:
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run test_transformer.py
+        run: |
+          echo "Running test_transformer.py"
+          docker run --rm \
+            -e vpu_num_lanes="${{ inputs.vector_lane }}" \
+            -e vpu_spad_size_kb_per_lane="${{ inputs.spad_size }}" \
+            ${{ inputs.image_name }} python3 PyTorchSim/tests/test_transformer.py
+
+  test_transpose3D:
+    name: Run test_transpose3D.py
+    runs-on: self-hosted
+    steps:
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run test_transpose3D.py
+        run: |
+          echo "Running test_transpose3D.py"
+          docker run --rm \
+            -e vpu_num_lanes="${{ inputs.vector_lane }}" \
+            -e vpu_spad_size_kb_per_lane="${{ inputs.spad_size }}" \
+            ${{ inputs.image_name }} python3 PyTorchSim/tests/test_transpose3D.py
+
+  test_sparsity:
+    name: Run test_sparsity.py
+    runs-on: self-hosted
+    steps:
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run test_sparsity.py
+        run: |
+          echo "Running test_sparsity.py"
+          docker run --rm \
+            -e vpu_num_lanes="${{ inputs.vector_lane }}" \
+            -e vpu_spad_size_kb_per_lane="${{ inputs.spad_size }}" \
+            ${{ inputs.image_name }} python3 PyTorchSim/tests/test_sparsity.py
+
+  test_pool:
+    name: Run test_pool.py
+    runs-on: self-hosted
+    steps:
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run test_pool.py
+        run: |
+          echo "Running test_pool.py"
+          docker run --rm \
+            -e vpu_num_lanes="${{ inputs.vector_lane }}" \
+            -e vpu_spad_size_kb_per_lane="${{ inputs.spad_size }}" \
+            ${{ inputs.image_name }} python3 PyTorchSim/tests/test_pool.py
+
+  test_perceptron:
+    name: Run test_perceptron.py
+    runs-on: self-hosted
+    steps:
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run test_single_perceptron.py
+        run: |
+          echo "Running test_single_perceptron.py"
+          docker run --rm \
+            -e vpu_num_lanes="${{ inputs.vector_lane }}" \
+            -e vpu_spad_size_kb_per_lane="${{ inputs.spad_size }}" \
+            ${{ inputs.image_name }} python3 PyTorchSim/tests/test_single_perceptron.py
+
+  test_fusion:
+    name: Run test_fusion
+    runs-on: self-hosted
+    steps:
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run test_addmm_residual.py
+        run: |
+          echo "Running test_addmm_residual.py"
+          docker run --rm \
+            -e vpu_num_lanes="${{ inputs.vector_lane }}" \
+            -e vpu_spad_size_kb_per_lane="${{ inputs.spad_size }}" \
+            ${{ inputs.image_name }} python3 PyTorchSim/tests/Fusion/test_addmm_residual.py
+
+      - name: Run test_matmul_activation.py
+        run: |
+          echo "Running test_matmul_activation.py"
+          docker run --rm \
+            -e vpu_num_lanes="${{ inputs.vector_lane }}" \
+            -e vpu_spad_size_kb_per_lane="${{ inputs.spad_size }}" \
+            ${{ inputs.image_name }} python3 PyTorchSim/tests/Fusion/test_matmul_activation.py
+
+      - name: Run test_matmul_scalar.py
+        run: |
+          echo "Running test_matmul_scalar.py"
+          docker run --rm \
+            -e vpu_num_lanes="${{ inputs.vector_lane }}" \
+            -e vpu_spad_size_kb_per_lane="${{ inputs.spad_size }}" \
+            ${{ inputs.image_name }} python3 PyTorchSim/tests/Fusion/test_matmul_scalar.py
+
+      - name: Run test_matmul_reduction.py
+        run: |
+          echo "Running test_matmul_reduction.py"
+          docker run --rm \
+            -e vpu_num_lanes="${{ inputs.vector_lane }}" \
+            -e vpu_spad_size_kb_per_lane="${{ inputs.spad_size }}" \
+            ${{ inputs.image_name }} python3 PyTorchSim/tests/Fusion/test_matmul_reduction.py
+
+      - name: Run test_bmm_reduction.py
+        run: |
+          echo "Running test_bmm_reduction.py"
+          docker run --rm \
+            -e vpu_num_lanes="${{ inputs.vector_lane }}" \
+            -e vpu_spad_size_kb_per_lane="${{ inputs.spad_size }}" \
+            ${{ inputs.image_name }} python3 PyTorchSim/tests/Fusion/test_bmm_reduction.py
+
+      - name: Run test_prologue_fusion.py
+        run: |
+          echo "Running test_prologue_fusion.py"
+          docker run --rm \
+            -e vpu_num_lanes="${{ inputs.vector_lane }}" \
+            -e vpu_spad_size_kb_per_lane="${{ inputs.spad_size }}" \
+            ${{ inputs.image_name }} python3 PyTorchSim/tests/Fusion/test_prologue_fusion.py
+
+      - name: Run test_transformer_fusion.py
+        run: |
+          echo "Running test_transformer_fusion.py"
+          docker run --rm \
+            -e vpu_num_lanes="${{ inputs.vector_lane }}" \
+            -e vpu_spad_size_kb_per_lane="${{ inputs.spad_size }}" \
+            ${{ inputs.image_name }} python3 PyTorchSim/tests/Fusion/test_transformer_fusion.py
+
+      - name: Run test_conv_fusion.py
+        run: |
+          echo "Running test_conv_fusion.py"
+          docker run --rm \
+            -e vpu_num_lanes="${{ inputs.vector_lane }}" \
+            -e vpu_spad_size_kb_per_lane="${{ inputs.spad_size }}" \
+            ${{ inputs.image_name }} python3 PyTorchSim/tests/Fusion/test_conv_fusion.py
+
+  test_moe:
+    name: Run test_moe
+    runs-on: self-hosted
+    steps:
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run test_moe.py
+        run: |
+          echo "Running test_moe.py"
+          docker run --rm \
+            -e vpu_num_lanes="${{ inputs.vector_lane }}" \
+            -e vpu_spad_size_kb_per_lane="${{ inputs.spad_size }}" \
+            ${{ inputs.image_name }} python3 PyTorchSim/tests/MoE/test_moe.py
+
+  test_mistral:
+    name: Run test_mistral
+    runs-on: self-hosted
+    steps:
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run test_mistral.py
+        run: |
+          echo "Running test_mistral.py"
+          docker run --rm \
+            -e vpu_num_lanes="${{ inputs.vector_lane }}" \
+            -e vpu_spad_size_kb_per_lane="${{ inputs.spad_size }}" \
+            ${{ inputs.image_name }} python3 PyTorchSim/tests/Mixtral_8x7B/test_attention.py
+
+  test_vit:
+    name: Run test_vit
+    runs-on: self-hosted
+    steps:
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run test_vit.py
+        run: |
+          echo "Running test_vit.py"
+          docker run --rm \
+            -e vpu_num_lanes="${{ inputs.vector_lane }}" \
+            -e vpu_spad_size_kb_per_lane="${{ inputs.spad_size }}" \
+            ${{ inputs.image_name }} python3 PyTorchSim/tests/test_vit.py
+
+  test_diffusion:
+    name: Run test_diffusion
+    runs-on: self-hosted
+    steps:
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run test_diffusion.py
+        run: |
+          echo "Running test_diffusion.py"
+          docker run --rm \
+            -e vpu_num_lanes="${{ inputs.vector_lane }}" \
+            -e vpu_spad_size_kb_per_lane="${{ inputs.spad_size }}" \
+            ${{ inputs.image_name }} python3 PyTorchSim/tests/Diffusion/test_diffusion.py
+
+  test_indirect:
+    name: Run test_indirect
+    runs-on: self-hosted
+    steps:
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run test_indirect.py
+        run: |
+          echo "Running test_indirect.py"
+          docker run --rm \
+            -e vpu_num_lanes="${{ inputs.vector_lane }}" \
+            -e vpu_spad_size_kb_per_lane="${{ inputs.spad_size }}" \
+            ${{ inputs.image_name }} python3 PyTorchSim/tests/test_indirect_access.py
+
+  test_scheduler:
+    name: Run test_scheduler
+    runs-on: self-hosted
+    steps:
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run test_scheduler.py
+        run: |
+          echo "Running test_scheduler.py"
+          docker run --rm \
+            -e vpu_num_lanes="${{ inputs.vector_lane }}" \
+            -e vpu_spad_size_kb_per_lane="${{ inputs.spad_size }}" \
+            ${{ inputs.image_name }} python3 PyTorchSim/tests/test_scheduler.py
+
+  test_llama:
+    name: Run test_llama1&2
+    runs-on: self-hosted
+    steps:
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run test_llama.py
+        run: |
+          echo "Running test_llama.py"
+          docker run --rm \
+            -e vpu_num_lanes="${{ inputs.vector_lane }}" \
+            -e vpu_spad_size_kb_per_lane="${{ inputs.spad_size }}" \
+            ${{ inputs.image_name }} python3 PyTorchSim/tests/Llama/test_llama.py
+
+  test_yolov5:
+    name: Run test_yolov5
+    runs-on: self-hosted
+    steps:
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run test_yolov5.py
+        run: |
+          echo "Running test_yolov5.py"
+          docker run --rm \
+            -e vpu_num_lanes="${{ inputs.vector_lane }}" \
+            -e vpu_spad_size_kb_per_lane="${{ inputs.spad_size }}" \
+            ${{ inputs.image_name }} python3 PyTorchSim/tests/Yolov5/test_yolov5.py
+
+  test_deepseek:
+    name: Run test_deepseek
+    runs-on: self-hosted
+    steps:
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run test_deepseek_v3_base.py
+        run: |
+          echo "Running test_deepseek_v3_base.py"
+          docker run --rm \
+            -e vpu_num_lanes="${{ inputs.vector_lane }}" \
+            -e vpu_spad_size_kb_per_lane="${{ inputs.spad_size }}" \
+            ${{ inputs.image_name }} python3 PyTorchSim/tests/DeepSeek/test_deepseek_v3_base.py
+
+  test_accuracy:
+    name: Run test_accuracy and test_speedup
+    runs-on: self-hosted
+    if: inputs.vector_lane == 128
+    steps:
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: run_cycle, accuracy summary, run_speedup
+        env:
+          ART_DIR: ${{ runner.temp }}/pt_sim_cycle_and_speedup
+        run: |
+          set -e
+          set -u
+          set -o pipefail
+          mkdir -p "$ART_DIR"
+          docker run --rm \
+            -e vpu_num_lanes="${{ inputs.vector_lane }}" \
+            -e vpu_spad_size_kb_per_lane="${{ inputs.spad_size }}" \
+            -e SKIP_ILS=1 \
+            -e SPEEDUP_ITERS=2 \
+            -v "$ART_DIR:/artifacts" \
+            ${{ inputs.image_name }} bash -c 'set -eu -o pipefail; cd /workspace; export TORCHSIM_DIR="${TORCHSIM_DIR:-/workspace/PyTorchSim}"; \
+            PyTorchSim/experiments/artifact/cycle_validation/run_cycle.sh >/dev/null 2>&1; \
+            cp "$TORCHSIM_DIR/experiments/artifact/cycle_validation/summary_cycle.out" /artifacts/summary_cycle.out; \
+            PyTorchSim/experiments/artifact/speedup/run_speedup.sh; \
+            bash PyTorchSim/experiments/artifact/speedup/check_speedup_smoke.sh; \
+            cp "$TORCHSIM_DIR/experiments/artifact/speedup/summary_speedup.log" /artifacts/summary_speedup.log' \
+            2>&1 | tee speedup_smoke.log
+          # Same layout as the old split job (root for accuracy artifact, both logs for speedup)
+          cp -f "$ART_DIR/summary_cycle.out" summary_cycle.out
+          cp -f "$ART_DIR/summary_speedup.log" summary_speedup.log
+
+      - name: Upload Accuracy Report Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: accuracy-report
+          path: summary_cycle.out
+          if-no-files-found: error
+
+      - name: Upload speedup smoke log
+        uses: actions/upload-artifact@v4
+        with:
+          name: speedup-smoke
+          path: |
+            speedup_smoke.log
+            summary_speedup.log
+          if-no-files-found: error
