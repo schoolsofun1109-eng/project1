@@ -27,6 +27,13 @@ def log_result(text):
     print(text)
 
 def test_result(name, out, cpu_out, rtol=1e-4, atol=1e-4, m=None, n=None, k=None):
+    # Calculate differences for verification
+    diff_detail = (out.cpu() - cpu_out).abs()
+    rel_diff = diff_detail / (cpu_out.abs() + 1e-8)
+    max_abs_diff = diff_detail.max().item()
+    max_rel_diff = rel_diff.max().item()
+    mean_abs_diff = diff_detail.mean().item()
+
     if torch.allclose(out.cpu(), cpu_out, rtol=rtol, atol=atol):
         message = f"|{name} Test Passed|"
         log_result("-" * len(message))
@@ -36,10 +43,28 @@ def test_result(name, out, cpu_out, rtol=1e-4, atol=1e-4, m=None, n=None, k=None
         # Print matrix dimensions and result statistics
         if m is not None and n is not None and k is not None:
             log_result(f"Matrix: {m}×{k}×{n}")
-            log_result(f"Output sum: {out.sum().item():.4f}")
-            log_result(f"Output min: {out.min().item():.4f}, max: {out.max().item():.4f}")
 
-            # Print tensor output
+            # Compare CPU vs NPU outputs
+            npu_sum = out.sum().item()
+            cpu_sum = cpu_out.sum().item()
+            log_result(f"NPU Output sum: {npu_sum:.4f}")
+            log_result(f"CPU Output sum: {cpu_sum:.4f}")
+            log_result(f"Sum match: {abs(npu_sum - cpu_sum) < 0.01}")
+
+            log_result(f"NPU Output min: {out.min().item():.4f}, max: {out.max().item():.4f}")
+            log_result(f"CPU Output min: {cpu_out.min().item():.4f}, max: {cpu_out.max().item():.4f}")
+
+            # Print difference analysis
+            log_result("")
+            log_result("=== 정밀도 분석 (Precision Analysis) ===")
+            log_result(f"Max absolute difference: {max_abs_diff:.6e}")
+            log_result(f"Max relative difference: {max_rel_diff:.6e}")
+            log_result(f"Mean absolute difference: {mean_abs_diff:.6e}")
+            log_result(f"Output shape: {out.shape}, dtype: {out.dtype}")
+            log_result(f"NPU first 5: {out.cpu().flatten()[:5]}")
+            log_result(f"CPU first 5: {cpu_out.flatten()[:5]}")
+
+            # Print full tensor output
             log_result(f"custom out: {out.cpu()}")
             log_result(f"cpu out: {cpu_out}")
 
