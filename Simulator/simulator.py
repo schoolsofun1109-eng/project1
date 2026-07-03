@@ -78,10 +78,83 @@ class FunctionalSimulator():
 
     def load_tensor(self, arg, arg_name, arg_attribute, path):
         # path = os.path.join(dump_path, arg_name, f'{n_call}.raw')
+        print(f"\n{'='*80}")
+        print(f"[DEBUG LOAD] === LOADING TENSOR: {arg_name} ===")
+        print(f"[DEBUG LOAD] Path: {path}")
+        print(f"[DEBUG LOAD] Expected arg.size(): {arg.size()}")
+        print(f"[DEBUG LOAD] Expected arg.stride(): {arg.stride()}")
+        print(f"[DEBUG LOAD] Expected arg.dtype: {arg.dtype}")
+        print(f"[DEBUG LOAD] Expected elements: {arg.numel()}")
+
+        # Check file size
+        file_size = os.path.getsize(path)
+        element_size = TORCH_TO_NUMPY[arg.dtype]().itemsize
+        expected_size = arg.numel() * element_size
+        print(f"[DEBUG LOAD] File size: {file_size} bytes")
+        print(f"[DEBUG LOAD] Expected size: {expected_size} bytes ({arg.numel()} elements × {element_size} bytes)")
+        print(f"[DEBUG LOAD] File size match: {file_size == expected_size}")
+
         with open(path, 'rb') as f:
             np_array = np.fromfile(f, dtype=TORCH_TO_NUMPY[arg.dtype])
+            print(f"\n[DEBUG LOAD] After np.fromfile():")
+            print(f"[DEBUG LOAD] Raw array shape: {np_array.shape}")
+            print(f"[DEBUG LOAD] Raw array dtype: {np_array.dtype}")
+            print(f"[DEBUG LOAD] Raw array size: {np_array.size}")
+            print(f"[DEBUG LOAD] First 5 elements (raw): {np_array.flat[:5]}")
+            print(f"[DEBUG LOAD] Last 5 elements (raw): {np_array.flat[-5:]}")
+
+            # Save a dump for debugging
+            debug_dump_path = path.replace('.raw', '_numpy_dump.txt')
+            with open(debug_dump_path, 'w') as df:
+                df.write(f"File: {path}\n")
+                df.write(f"Expected size: {expected_size} bytes\n")
+                df.write(f"File size: {file_size} bytes\n")
+                df.write(f"NumPy array shape: {np_array.shape}\n")
+                df.write(f"First 10 elements: {np_array.flat[:10]}\n")
+                df.write(f"Last 10 elements: {np_array.flat[-10:]}\n")
+
+            print(f"\n[DEBUG LOAD] Calling torch.as_strided()...")
+            print(f"[DEBUG LOAD] Input: torch.from_numpy(np_array) with shape {np_array.shape}")
+            print(f"[DEBUG LOAD] Target size: {arg.size()}")
+            print(f"[DEBUG LOAD] Target stride: {arg.stride()}")
+
             src_tensor = torch.as_strided(torch.from_numpy(np_array), arg.size(), arg.stride())
+
+            print(f"\n[DEBUG LOAD] After torch.as_strided():")
+            print(f"[DEBUG LOAD] Result tensor shape: {src_tensor.shape}")
+            print(f"[DEBUG LOAD] Result tensor stride: {src_tensor.stride()}")
+            print(f"[DEBUG LOAD] Result tensor dtype: {src_tensor.dtype}")
+            print(f"[DEBUG LOAD] First 5 elements (flattened): {src_tensor.flatten()[:5]}")
+            print(f"[DEBUG LOAD] Last 5 elements (flattened): {src_tensor.flatten()[-5:]}")
+
+            # Check if output has corruption pattern
+            if arg.numel() >= 256*256:
+                print(f"\n[DEBUG LOAD] === CORRUPTION PATTERN CHECK (256×256 or larger) ===")
+                t_sum_0_64 = src_tensor[0:64, 0:64].sum().item()
+                t_sum_64_128 = src_tensor[64:128, 64:128].sum().item()
+                t_sum_128_192 = src_tensor[128:192, 128:192].sum().item()
+                t_sum_192_256 = src_tensor[192:256, 192:256].sum().item()
+                print(f"[DEBUG LOAD] Tile [0:64, 0:64] sum: {t_sum_0_64:.4f}")
+                print(f"[DEBUG LOAD] Tile [64:128, 64:128] sum: {t_sum_64_128:.4f}")
+                print(f"[DEBUG LOAD] Tile [128:192, 128:192] sum: {t_sum_128_192:.4f}")
+                print(f"[DEBUG LOAD] Tile [192:256, 192:256] sum: {t_sum_192_256:.4f}")
+
+                eq_128_192 = (src_tensor[128:192, :] == src_tensor[192:256, :]).all().item()
+                eq_64_128 = (src_tensor[64:128, :] == src_tensor[128:192, :]).all().item()
+                eq_0_64 = (src_tensor[0:64, :] == src_tensor[64:128, :]).all().item()
+                print(f"[DEBUG LOAD] Tiles [128:192] == [192:256]? {eq_128_192}")
+                print(f"[DEBUG LOAD] Tiles [64:128] == [128:192]? {eq_64_128}")
+                print(f"[DEBUG LOAD] Tiles [0:64] == [64:128]? {eq_0_64}")
+
+            print(f"\n[DEBUG LOAD] Copying to output tensor (arg.copy_)...")
             arg.copy_(src_tensor.to(dtype=arg.dtype))
+
+            print(f"\n[DEBUG LOAD] After copy_(src_tensor):")
+            print(f"[DEBUG LOAD] arg.shape: {arg.shape}")
+            print(f"[DEBUG LOAD] arg.dtype: {arg.dtype}")
+            print(f"[DEBUG LOAD] arg first 5 (flattened): {arg.flatten()[:5]}")
+            print(f"[DEBUG LOAD] arg last 5 (flattened): {arg.flatten()[-5:]}")
+            print(f"{'='*80}\n")
 
     def get_biggest_filename(self, path):
         return len(os.listdir(path))
@@ -166,9 +239,16 @@ class FunctionalSimulator():
                 error_msg = "UNKNOWN_ERROR"
             raise RuntimeError(f"{error_msg}")
 
+        print(f"\n[DEBUG SPIKE] Spike simulation completed. Loading output tensors...")
         for (arg_name, arg_attribute), arg, path in zip(arg_attributes, args, file_path):
             if MLIRKernelArgs.is_mlir_arg_out(arg_attribute[0]):
+                print(f"\n[DEBUG SPIKE] Processing output argument: {arg_name}")
+                print(f"[DEBUG SPIKE] Output path: {path}")
+                print(f"[DEBUG SPIKE] Output tensor shape before load: {arg.shape}")
                 self.load_tensor(arg, arg_name, arg_attribute, path)
+                print(f"[DEBUG SPIKE] Output tensor shape after load: {arg.shape}")
+                print(f"[DEBUG SPIKE] Output tensor first 5 elements: {arg.flatten()[:5]}")
+                print(f"[DEBUG SPIKE] Output tensor last 5 elements: {arg.flatten()[-5:]}\n")
 
         if cleanup:
             for path in file_path:
