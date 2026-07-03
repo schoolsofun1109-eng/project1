@@ -39,6 +39,10 @@ def test_result(name, out, cpu_out, rtol=1e-4, atol=1e-4, m=None, n=None, k=None
             log_result(f"Output sum: {out.sum().item():.4f}")
             log_result(f"Output min: {out.min().item():.4f}, max: {out.max().item():.4f}")
 
+            # Print tensor output
+            log_result(f"custom out: {out.cpu()}")
+            log_result(f"cpu out: {cpu_out}")
+
         # Print performance metrics summary
         log_result("")
         log_result("SIMULATION RESULTS:")
