@@ -52,28 +52,28 @@ def test_result(name, out, cpu_out, rtol=1e-4, atol=1e-4, m=None, n=None, k=None
             log_dir = "/workspace/PyTorchSim/togsim_results"
             if os.path.exists(log_dir):
                 # Find latest log file
-                log_files = sorted([f for f in os.listdir(log_dir) if f.endswith('.log')])
+                import glob
+                log_files = glob.glob(os.path.join(log_dir, "*.log"))
                 if log_files:
-                    latest_log = os.path.join(log_dir, log_files[-1])
+                    latest_log = max(log_files, key=os.path.getctime)
                     log_result(f"Log file: {os.path.basename(latest_log)}")
+
                     with open(latest_log, 'r') as f:
                         content = f.read()
-                        # Extract metrics
-                        cycles_match = re.search(r'Total cycle: (\d+)', content)
-                        systolic_match = re.search(r'Systolic Array Utilization\(%\) ([\d.]+)', content)
-                        vector_match = re.search(r'Vector Unit Utilization\(%\) ([\d.]+)', content)
-                        bw_match = re.search(r'DRAM: AVG BW Util ([\d.]+)%', content)
+
+                        # Extract metrics using proper regex patterns
+                        cycles_match = re.search(r'Total execution cycles: (\d+)', content)
+                        systolic_match = re.search(r'Systolic array \[0\] utilization\(%\): ([\d.]+)', content)
+                        bw_match = re.search(r'channels 0\.\.15 combined.*?(\d+\.?\d*) GB/s', content)
 
                         if cycles_match:
-                            log_result(f"Total cycles: {cycles_match.group(1):>8}")
+                            log_result(f"Total cycles:     {cycles_match.group(1):>10}")
                         if systolic_match:
-                            log_result(f"Systolic [0]: {systolic_match.group(1):>8}%")
-                        if vector_match:
-                            log_result(f"Vector Unit: {vector_match.group(1):>8}%")
+                            log_result(f"Systolic [0]:     {systolic_match.group(1):>10}%")
                         if bw_match:
-                            log_result(f"DRAM BW: {bw_match.group(1):>8}%")
+                            log_result(f"DRAM BW:          {bw_match.group(1):>10} GB/s")
         except Exception as e:
-            log_result(f"(Performance metrics unavailable)")
+            log_result(f"(Performance metrics unavailable: {str(e)})")
 
         log_result("")
 
