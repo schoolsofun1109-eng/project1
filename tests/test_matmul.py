@@ -105,48 +105,65 @@ def snapshot_log_files():
         pass
     return {}
 
-def get_new_log_file(before_snapshot, after_snapshot=None, max_retries=10, retry_delay=0.5):
+def get_new_log_file(before_snapshot, after_snapshot=None, max_retries=20, retry_delay=0.5, min_size=1000):
     """Find the log file modified between two snapshots.
 
-    Returns path to the log file that was created/modified, or None if not found.
+    Returns path to the log file that was created/modified with min_size bytes, or None if not found.
+    Waits for file to have sufficient content (Spike simulation completion).
     """
-    if after_snapshot is None:
-        log_dir = get_log_dir()
-        for attempt in range(max_retries):
-            try:
-                if not os.path.exists(log_dir):
-                    if attempt < max_retries - 1:
-                        time.sleep(retry_delay)
-                    continue
-                import glob
-                current_files = glob.glob(os.path.join(log_dir, "*.log"))
-                after_snapshot = {}
-                for f in current_files:
-                    try:
-                        after_snapshot[f] = os.path.getmtime(f)
-                    except OSError:
-                        pass
-                if after_snapshot:
-                    break
-            except Exception:
+    log_dir = get_log_dir()
+
+    # First pass: find newly created files
+    for attempt in range(max_retries):
+        try:
+            if not os.path.exists(log_dir):
                 if attempt < max_retries - 1:
                     time.sleep(retry_delay)
+                continue
+            import glob
+            current_files = glob.glob(os.path.join(log_dir, "*.log"))
+            after_snapshot = {}
+            for f in current_files:
+                try:
+                    after_snapshot[f] = os.path.getmtime(f)
+                except OSError:
+                    pass
 
-    if not after_snapshot:
-        return None
+            # Find files modified/created between snapshots
+            modified_files = []
+            for f_after, mtime_after in after_snapshot.items():
+                mtime_before = before_snapshot.get(f_after)
+                if mtime_before is None:
+                    # New file created
+                    modified_files.append((f_after, mtime_after))
+                elif mtime_after > mtime_before:
+                    # File modified
+                    modified_files.append((f_after, mtime_after))
 
-    # Find files modified/created between snapshots
-    modified_files = []
-    for f_after, mtime_after in after_snapshot.items():
-        mtime_before = before_snapshot.get(f_after)
-        if mtime_before is None:
-            modified_files.append((f_after, mtime_after))
-        elif mtime_after > mtime_before:
-            modified_files.append((f_after, mtime_after))
+            if modified_files:
+                # Pick the most recently modified file
+                modified_log = max(modified_files, key=lambda x: x[1])[0]
 
-    if modified_files:
-        modified_log = max(modified_files, key=lambda x: x[1])[0]
-        return modified_log
+                # Wait for file to have sufficient content (Spike completion)
+                for size_check in range(10):
+                    try:
+                        file_size = os.path.getsize(modified_log)
+                        if file_size >= min_size:
+                            return modified_log
+                    except OSError:
+                        pass
+
+                    if size_check < 9:
+                        time.sleep(0.2)
+
+                # If size check times out, still return the file (it may have metrics)
+                return modified_log
+
+            if attempt < max_retries - 1:
+                time.sleep(retry_delay)
+        except Exception:
+            if attempt < max_retries - 1:
+                time.sleep(retry_delay)
 
     return None
 
