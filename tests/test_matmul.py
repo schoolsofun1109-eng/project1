@@ -50,9 +50,9 @@ def log_result(text):
     print(text)
 
 def snapshot_log_files():
-    """Create a snapshot of current log files with their modification times.
+    """Create a snapshot of current log files with their mtime and size.
 
-    Returns a dict mapping log file paths to their mtime values.
+    Returns a dict mapping log file paths to their (mtime, size) tuples.
     Used to detect which files were modified during torch.compile.
     """
     log_dir = get_log_dir()
@@ -61,27 +61,24 @@ def snapshot_log_files():
             import glob
             log_files = glob.glob(os.path.join(log_dir, "*.log"))
             snapshot = {}
-            print(f"[SNAPSHOT] Log dir: {log_dir}")
-            print(f"[SNAPSHOT] Found {len(log_files)} existing log files")
             for f in log_files:
                 try:
                     mtime = os.path.getmtime(f)
-                    snapshot[f] = mtime
-                    print(f"[SNAPSHOT] {os.path.basename(f)}: mtime={mtime}")
+                    size = os.path.getsize(f)
+                    snapshot[f] = (mtime, size)
                 except OSError:
                     pass
             return snapshot
-    except Exception as e:
-        print(f"[SNAPSHOT] Error: {e}")
+    except Exception:
         pass
     return {}
 
 def get_new_log_file(before_snapshot, after_snapshot=None, max_retries=5, retry_delay=0.2):
-    """Find the log file modified between two snapshots.
+    """Find the log file modified between two snapshots (by mtime or size change).
 
     Args:
-        before_snapshot: Dict of log file paths and their mtimes from before test execution
-        after_snapshot: Dict of log file paths and their mtimes from after test execution.
+        before_snapshot: Dict of log file paths and their (mtime, size) tuples from before
+        after_snapshot: Dict of log file paths and their (mtime, size) tuples from after.
                        If None, will compare with current filesystem state.
         max_retries: Number of times to retry if no modified file is found
         retry_delay: Delay in seconds between retries
@@ -89,7 +86,8 @@ def get_new_log_file(before_snapshot, after_snapshot=None, max_retries=5, retry_
     Returns:
         Path to the log file that was modified, or None if not found.
 
-    This compares two snapshots to find which log file was created/modified between them.
+    This compares two snapshots to find which log file was created/modified between them,
+    detecting changes in either mtime or file size (handles appended logs).
     """
     if after_snapshot is None:
         # Fallback: compare with current filesystem state with retries
@@ -105,7 +103,7 @@ def get_new_log_file(before_snapshot, after_snapshot=None, max_retries=5, retry_
                 after_snapshot = {}
                 for f in current_files:
                     try:
-                        after_snapshot[f] = os.path.getmtime(f)
+                        after_snapshot[f] = (os.path.getmtime(f), os.path.getsize(f))
                     except OSError:
                         pass
                 if after_snapshot:
@@ -120,17 +118,19 @@ def get_new_log_file(before_snapshot, after_snapshot=None, max_retries=5, retry_
 
     # Find files modified between before and after snapshots
     modified_files = []
-    for f_after, mtime_after in after_snapshot.items():
-        mtime_before = before_snapshot.get(f_after)
+    for f_after, (mtime_after, size_after) in after_snapshot.items():
+        before_info = before_snapshot.get(f_after)
 
-        if mtime_before is None:
+        if before_info is None:
             # New file
             modified_files.append((f_after, mtime_after))
-            print(f"[GET_NEW_LOG] NEW: {os.path.basename(f_after)}")
-        elif mtime_after > mtime_before:
-            # File was modified
-            modified_files.append((f_after, mtime_after))
-            print(f"[GET_NEW_LOG] MODIFIED: {os.path.basename(f_after)} (before={mtime_before:.2f}, after={mtime_after:.2f})")
+            print(f"[GET_NEW_LOG] NEW: {os.path.basename(f_after)} (size={size_after})")
+        else:
+            mtime_before, size_before = before_info
+            # Check if either mtime or size changed
+            if mtime_after > mtime_before or size_after > size_before:
+                modified_files.append((f_after, mtime_after))
+                print(f"[GET_NEW_LOG] MODIFIED: {os.path.basename(f_after)} (size {size_before}→{size_after}, mtime {mtime_before:.2f}→{mtime_after:.2f})")
 
     if modified_files:
         # Pick the most recently modified file
