@@ -306,7 +306,7 @@ def test_matmul(device, input_size=128, hidden_size=128, output_size=128):
     opt_fn = torch.compile(dynamic=False)(custom_matmul)
     res = opt_fn(x1, w1)
 
-    log_file = get_log_file_after_timestamp(test_start, max_retries=5, retry_delay=0.2)
+    log_file = get_log_file_after_timestamp(test_start)
 
     y = custom_matmul(x2, w2)
     test_result("Matmul Forward", res, y, m=input_size, n=output_size, k=hidden_size, log_file=log_file)
@@ -331,7 +331,7 @@ def test_addmm(device, input_size=128, hidden_size=128, output_size=128, bias_ra
     opt_fn = torch.compile(dynamic=False)(custom_matmul)
     res = opt_fn(b1, x1, w1)
 
-    log_file = get_log_file_after_timestamp(test_start, max_retries=5, retry_delay=0.2)
+    log_file = get_log_file_after_timestamp(test_start)
 
     y = custom_matmul(b2, x2, w2)
     test_result("Addmm Forward", res, y, m=input_size, n=output_size, k=hidden_size, log_file=log_file)
@@ -356,7 +356,7 @@ def test_addmm2(device, input_size=128, hidden_size=128, output_size=128):
     opt_fn = torch.compile(dynamic=False)(custom_matmul)
     res = opt_fn(b1, x1, w1)
 
-    log_file = get_log_file_after_timestamp(test_start, max_retries=5, retry_delay=0.2)
+    log_file = get_log_file_after_timestamp(test_start)
 
     y = custom_matmul(b2, x2, w2)
     test_result("Addmm2 Forward", res, y, m=input_size, n=output_size, k=hidden_size, log_file=log_file)
@@ -384,7 +384,7 @@ def test_linear(device, input_size=128, hidden_size=128, output_size=128):
     opt_fn = torch.compile(dynamic=False)(custom_linear)
     res = opt_fn(x1, w1, b1)
 
-    log_file = get_log_file_after_timestamp(test_start, max_retries=5, retry_delay=0.2)
+    log_file = get_log_file_after_timestamp(test_start)
 
     y = custom_linear(x2, w2, b2)
     test_result("Linear Forward", res, y, m=input_size, n=output_size, k=hidden_size, log_file=log_file)
