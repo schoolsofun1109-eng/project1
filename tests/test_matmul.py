@@ -1,7 +1,11 @@
-import torch
 import os
-import re
 import sys
+
+# Disable auto-loading of extension backends before importing torch
+os.environ['TORCH_DEVICE_BACKEND_AUTOLOAD'] = '0'
+
+import torch
+import re
 import time
 from datetime import datetime
 
@@ -11,6 +15,7 @@ sys.path.insert(0, '/workspace/PyTorchSim')
 # CRITICAL: Register npu device and backend (required for torch.compile to use npu)
 try:
     import PyTorchSimDevice.torch_openreg
+    print("[INFO] NPU device and backend registered successfully")
 except Exception as e:
     print(f"[WARNING] Failed to register npu device: {e}")
 
