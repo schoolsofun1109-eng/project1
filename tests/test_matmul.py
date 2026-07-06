@@ -454,7 +454,12 @@ if __name__ == "__main__":
         log_result(f"(Config unavailable: {str(e)})")
         log_result("")
 
-    device = torch.device("npu:0")
+    # Try to use npu device, fall back to cpu if not available
+    try:
+        device = torch.device("npu:0")
+    except RuntimeError:
+        print("[WARNING] NPU device not available, using CPU instead")
+        device = torch.device("cpu")
     test_matmul(device, 32, 32, 32)
     test_matmul(device, 128, 128, 128)
     test_matmul(device, 256, 256, 256)
