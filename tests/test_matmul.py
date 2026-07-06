@@ -7,6 +7,13 @@ from datetime import datetime
 
 # Initialize config paths at module load time
 sys.path.insert(0, '/workspace/PyTorchSim')
+
+# CRITICAL: Register npu device and backend (required for torch.compile to use npu)
+try:
+    import PyTorchSimDevice.torch_openreg
+except Exception as e:
+    print(f"[WARNING] Failed to register npu device: {e}")
+
 try:
     from PyTorchSimFrontend import extension_config
     LOG_DIR = extension_config.CONFIG_TORCHSIM_LOG_PATH
