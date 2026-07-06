@@ -267,13 +267,13 @@ def test_result(name, out, cpu_out, rtol=1e-4, atol=1e-4, m=None, n=None, k=None
                 with open(log_file, 'r') as f:
                     content = f.read()
 
-                    systolic_match = re.search(r'Systolic array \[0\] utilization\(%\): ([\d.]+)', content)
-                    bw_match = re.search(r'channels 0\.\.15 combined.*?(\d+\.?\d*) GB/s', content)
+                    systolic_matches = re.findall(r'Systolic array \[0\] utilization\(%\): ([\d.]+)', content)
+                    bw_matches = re.findall(r'channels 0\.\.15 combined.*?(\d+\.?\d*) GB/s', content)
 
-                    if systolic_match:
-                        log_result(f"Systolic util: {systolic_match.group(1)}%")
-                    if bw_match:
-                        log_result(f"DRAM BW: {bw_match.group(1)} GB/s")
+                    if systolic_matches:
+                        log_result(f"Systolic util: {systolic_matches[-1]}%")
+                    if bw_matches:
+                        log_result(f"DRAM BW: {bw_matches[-1]} GB/s")
             except Exception as e:
                 log_result(f"(Metrics extraction error: {str(e)})")
         else:
