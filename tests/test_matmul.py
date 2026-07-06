@@ -61,73 +61,84 @@ def snapshot_log_files():
             import glob
             log_files = glob.glob(os.path.join(log_dir, "*.log"))
             snapshot = {}
+            print(f"[SNAPSHOT] Log dir: {log_dir}")
+            print(f"[SNAPSHOT] Found {len(log_files)} existing log files")
             for f in log_files:
                 try:
-                    snapshot[f] = os.path.getmtime(f)
+                    mtime = os.path.getmtime(f)
+                    snapshot[f] = mtime
+                    print(f"[SNAPSHOT] {os.path.basename(f)}: mtime={mtime}")
                 except OSError:
                     pass
             return snapshot
-    except Exception:
+    except Exception as e:
+        print(f"[SNAPSHOT] Error: {e}")
         pass
     return {}
 
-def get_new_log_file(before_snapshot, max_retries=5, retry_delay=0.2):
-    """Find the log file with modified timestamp by comparing with a previous snapshot.
+def get_new_log_file(before_snapshot, after_snapshot=None, max_retries=5, retry_delay=0.2):
+    """Find the log file modified between two snapshots.
 
     Args:
         before_snapshot: Dict of log file paths and their mtimes from before test execution
+        after_snapshot: Dict of log file paths and their mtimes from after test execution.
+                       If None, will compare with current filesystem state.
         max_retries: Number of times to retry if no modified file is found
         retry_delay: Delay in seconds between retries
 
     Returns:
         Path to the log file that was modified, or None if not found.
 
-    This finds which log file was updated (mtime changed) during torch.compile,
-    indicating it was written to during this specific test execution.
+    This compares two snapshots to find which log file was created/modified between them.
     """
-    log_dir = get_log_dir()
-
-    for attempt in range(max_retries):
-        try:
-            if not os.path.exists(log_dir):
+    if after_snapshot is None:
+        # Fallback: compare with current filesystem state with retries
+        log_dir = get_log_dir()
+        for attempt in range(max_retries):
+            try:
+                if not os.path.exists(log_dir):
+                    if attempt < max_retries - 1:
+                        time.sleep(retry_delay)
+                    continue
+                import glob
+                current_files = glob.glob(os.path.join(log_dir, "*.log"))
+                after_snapshot = {}
+                for f in current_files:
+                    try:
+                        after_snapshot[f] = os.path.getmtime(f)
+                    except OSError:
+                        pass
+                if after_snapshot:
+                    break
+            except Exception:
                 if attempt < max_retries - 1:
                     time.sleep(retry_delay)
-                continue
 
-            import glob
-            current_files = glob.glob(os.path.join(log_dir, "*.log"))
+    if not after_snapshot:
+        print(f"[GET_NEW_LOG] Could not read after_snapshot")
+        return None
 
-            # Find files with changed mtime
-            modified_files = []
-            for f in current_files:
-                try:
-                    current_mtime = os.path.getmtime(f)
-                    old_mtime = before_snapshot.get(f, -1)
+    # Find files modified between before and after snapshots
+    modified_files = []
+    for f_after, mtime_after in after_snapshot.items():
+        mtime_before = before_snapshot.get(f_after)
 
-                    # If file exists in snapshot but mtime changed, it was modified
-                    if f in before_snapshot and current_mtime > old_mtime:
-                        modified_files.append((f, current_mtime))
-                        print(f"[DEBUG] File modified: {os.path.basename(f)}")
-                except OSError:
-                    pass
+        if mtime_before is None:
+            # New file
+            modified_files.append((f_after, mtime_after))
+            print(f"[GET_NEW_LOG] NEW: {os.path.basename(f_after)}")
+        elif mtime_after > mtime_before:
+            # File was modified
+            modified_files.append((f_after, mtime_after))
+            print(f"[GET_NEW_LOG] MODIFIED: {os.path.basename(f_after)} (before={mtime_before:.2f}, after={mtime_after:.2f})")
 
-            if modified_files:
-                # Pick the most recently modified file
-                modified_log = max(modified_files, key=lambda x: x[1])[0]
-                print(f"[DEBUG] Returning modified: {os.path.basename(modified_log)}")
-                return modified_log
+    if modified_files:
+        # Pick the most recently modified file
+        modified_log = max(modified_files, key=lambda x: x[1])[0]
+        print(f"[GET_NEW_LOG] ✅ Returning: {os.path.basename(modified_log)}")
+        return modified_log
 
-            print(f"[DEBUG] Attempt {attempt+1}: Found {len(modified_files)} modified files")
-
-            # No modified files yet, retry
-            if attempt < max_retries - 1:
-                time.sleep(retry_delay)
-        except Exception as e:
-            print(f"[DEBUG] Exception in get_new_log_file: {str(e)}")
-            if attempt < max_retries - 1:
-                time.sleep(retry_delay)
-
-    print(f"[DEBUG] get_new_log_file returning None after {max_retries} attempts")
+    print(f"[GET_NEW_LOG] ❌ No modified files found between snapshots")
     return None
 
 def extract_cycle_from_log(log_file_path):
@@ -299,8 +310,11 @@ def test_matmul(device, input_size=128, hidden_size=128, output_size=128):
     opt_fn = torch.compile(dynamic=False)(custom_matmul)
     res = opt_fn(x1, w1)
 
+    # Snapshot again AFTER torch.compile to find files modified between before/after
+    after_logs = snapshot_log_files()
+
     # Find the log file created by this specific test execution
-    log_file = get_new_log_file(before_logs, max_retries=5, retry_delay=0.2)
+    log_file = get_new_log_file(before_logs, after_logs, max_retries=5, retry_delay=0.2)
 
     y = custom_matmul(x2, w2)
     test_result("Matmul Forward", res, y, m=input_size, n=output_size, k=hidden_size, log_file=log_file)
@@ -327,8 +341,11 @@ def test_addmm(device, input_size=128, hidden_size=128, output_size=128, bias_ra
     opt_fn = torch.compile(dynamic=False)(custom_matmul)
     res = opt_fn(b1, x1, w1)
 
+    # Snapshot again AFTER torch.compile to find files modified between before/after
+    after_logs = snapshot_log_files()
+
     # Find the log file created by this specific test execution
-    log_file = get_new_log_file(before_logs, max_retries=5, retry_delay=0.2)
+    log_file = get_new_log_file(before_logs, after_logs, max_retries=5, retry_delay=0.2)
 
     y = custom_matmul(b2, x2, w2)
     test_result("Addmm Forward", res, y, m=input_size, n=output_size, k=hidden_size, log_file=log_file)
@@ -355,8 +372,11 @@ def test_addmm2(device, input_size=128, hidden_size=128, output_size=128):
     opt_fn = torch.compile(dynamic=False)(custom_matmul)
     res = opt_fn(b1, x1, w1)
 
+    # Snapshot again AFTER torch.compile to find files modified between before/after
+    after_logs = snapshot_log_files()
+
     # Find the log file created by this specific test execution
-    log_file = get_new_log_file(before_logs, max_retries=5, retry_delay=0.2)
+    log_file = get_new_log_file(before_logs, after_logs, max_retries=5, retry_delay=0.2)
 
     y = custom_matmul(b2, x2, w2)
     test_result("Addmm2 Forward", res, y, m=input_size, n=output_size, k=hidden_size, log_file=log_file)
@@ -386,8 +406,11 @@ def test_linear(device, input_size=128, hidden_size=128, output_size=128):
     opt_fn = torch.compile(dynamic=False)(custom_linear)
     res = opt_fn(x1, w1, b1)
 
+    # Snapshot again AFTER torch.compile to find files modified between before/after
+    after_logs = snapshot_log_files()
+
     # Find the log file created by this specific test execution
-    log_file = get_new_log_file(before_logs, max_retries=5, retry_delay=0.2)
+    log_file = get_new_log_file(before_logs, after_logs, max_retries=5, retry_delay=0.2)
 
     y = custom_linear(x2, w2, b2)
     test_result("Linear Forward", res, y, m=input_size, n=output_size, k=hidden_size, log_file=log_file)
