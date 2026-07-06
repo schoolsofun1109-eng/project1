@@ -13,11 +13,21 @@ from datetime import datetime
 sys.path.insert(0, '/workspace/PyTorchSim')
 
 # CRITICAL: Register npu device and backend (required for torch.compile to use npu)
-try:
-    import PyTorchSimDevice.torch_openreg
-    print("[INFO] NPU device and backend registered successfully")
-except Exception as e:
-    print(f"[WARNING] Failed to register npu device: {e}")
+# Try multiple import paths (user's local code, container's installed package, etc.)
+npu_registered = False
+for import_path in [
+    'PyTorchSimDevice.torch_openreg',  # From /workspace or installed package
+]:
+    try:
+        __import__(import_path)
+        print(f"[INFO] NPU device registered via {import_path}")
+        npu_registered = True
+        break
+    except Exception as e:
+        print(f"[INFO] Could not register npu via {import_path}: {e}")
+
+if not npu_registered:
+    print("[WARNING] NPU device not registered - tests will run on CPU")
 
 try:
     from PyTorchSimFrontend import extension_config
