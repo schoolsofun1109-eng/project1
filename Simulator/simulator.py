@@ -611,14 +611,21 @@ class TOGSimulator():
 
     @staticmethod
     def _print_metrics_summary(content, result_path):
-        """Parse and log Cycles / per-array Systolic util / DRAM BW from a TOGSim log.
+        """Parse and log Cycles / Systolic util / Vector util / DRAM BW from a TOGSim log.
 
         Called automatically after every standalone simulation so metrics appear
         for any test, not just test_matmul.
+
+        Note: a decoder layer / model has both matmul kernels (use the systolic
+        array) and vector kernels (RMSNorm, RoPE, softmax, activation, elementwise)
+        that run on the Vector unit. Systolic-array-only reporting shows 0% for all
+        the vector kernels, so we also report Vector unit utilization to reflect the
+        work those kernels actually do.
         """
         try:
             cyc = re.findall(r'Total execution cycles:\s*(\d+)', content)
             arr = re.findall(r'Systolic array \[(\d+)\] utilization\(%\): ([\d.]+)', content)
+            vec = re.findall(r'Vector unit utilization\(%\): ([\d.]+)', content)
             bw = re.findall(r'channels 0\.\.15 combined.*?(\d+\.?\d*) GB/s', content)
 
             logger.info("[METRICS] ===== %s =====", os.path.basename(str(result_path)))
@@ -632,6 +639,8 @@ class TOGSimulator():
                     logger.info("[METRICS] Systolic array [%s] util: %s%%", idx, v)
                 logger.info("[METRICS] Systolic util (avg of %d arrays): %.2f%%",
                             num_arrays, sum(utils) / len(utils))
+            if vec:
+                logger.info("[METRICS] Vector unit util: %s%%", vec[-1])
             if bw:
                 logger.info("[METRICS] DRAM BW (16ch combined): %s GB/s", bw[-1])
         except Exception as e:
