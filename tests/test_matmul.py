@@ -71,7 +71,7 @@ def log_result(text):
             f.write(text + "\n")
     print(text)
 
-def get_log_file_after_timestamp(start_time, max_retries=5, retry_delay=0.2):
+def get_log_file_after_timestamp(start_time, max_retries=20, retry_delay=0.5):
     """Find log file modified after start_time (timestamp-based detection).
 
     This is the most reliable method: it finds any file whose mtime >= start_time,
@@ -87,6 +87,8 @@ def get_log_file_after_timestamp(start_time, max_retries=5, retry_delay=0.2):
     """
     log_dir = get_log_dir()
 
+    initial_sizes = {}
+
     for attempt in range(max_retries):
         try:
             if not os.path.exists(log_dir):
@@ -97,23 +99,34 @@ def get_log_file_after_timestamp(start_time, max_retries=5, retry_delay=0.2):
             import glob
             log_files = glob.glob(os.path.join(log_dir, "*.log"))
 
-            # Find files modified after start_time
-            modified_files = []
+            # On first attempt, record initial sizes
+            if not initial_sizes:
+                for f in log_files:
+                    try:
+                        initial_sizes[f] = os.path.getsize(f)
+                    except OSError:
+                        pass
+
+            # Find files that grew (size increased) since start_time
+            growing_files = []
             for f in log_files:
                 try:
+                    current_size = os.path.getsize(f)
+                    initial_size = initial_sizes.get(f, current_size)
                     mtime = os.path.getmtime(f)
-                    if mtime >= start_time:
-                        modified_files.append((f, mtime))
+
+                    # File grew OR mtime is after start_time
+                    if current_size > initial_size or mtime >= start_time:
+                        growing_files.append((f, current_size, mtime))
                 except OSError:
                     pass
 
-            if modified_files:
-                # Pick the most recently modified file
-                latest_log = max(modified_files, key=lambda x: x[1])[0]
-                print(f"[LOG_DETECT] ✅ Found: {os.path.basename(latest_log)} (mtime={os.path.getmtime(latest_log):.2f} >= start={start_time:.2f})")
+            if growing_files:
+                # Pick file with most recent mtime
+                latest_log = max(growing_files, key=lambda x: x[2])[0]
+                size_change = os.path.getsize(latest_log) - initial_sizes.get(latest_log, 0)
+                print(f"[LOG_DETECT] ✅ Found: {os.path.basename(latest_log)} (size +{size_change} bytes, mtime={os.path.getmtime(latest_log):.2f})")
                 return latest_log
-
-            print(f"[LOG_DETECT] Attempt {attempt+1}: No files with mtime >= {start_time:.2f}")
 
             if attempt < max_retries - 1:
                 time.sleep(retry_delay)
