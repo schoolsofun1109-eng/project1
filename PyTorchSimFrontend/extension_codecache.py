@@ -1,5 +1,6 @@
 import os
 import re
+import math
 import shlex
 import subprocess
 import torch
@@ -13,6 +14,34 @@ from Simulator.simulator import FunctionalSimulator, CycleSimulator, TOGSimulato
 
 # Configure logger for extension_codecache module (WARNING level by default)
 logger = extension_config.setup_logger()
+
+def _scale_cycles_for_3d_pe(cycle_list, k_tile, plane_size):
+    """Post-scale gem5-measured 2D systolic cycles into a 3D (Sm x Sn x Sk) PE array model.
+
+    gem5 measures each GEMM tile on the 2D array as roughly
+    (K-reduction streaming + fill/drain overhead). A 3D array of depth Sk
+    parallelizes the K reduction across Sk PEs, so only the reduction part
+    shrinks by ~Sk while fill/drain (~Sm+Sn) is unchanged:
+
+        frac_reduce = K_t / (K_t + Sm + Sn)
+        c_3d        = ceil( c*frac_reduce / Sk + c*(1 - frac_reduce) )
+
+    Sk = 1 => returns cycle_list unchanged (bit-exact 2D behavior, early return).
+    """
+    Sk = extension_config.systolic_array_size_k
+    if Sk is None or Sk <= 1:
+        return cycle_list  # 2D array: identical to before, no scaling
+    Sm = Sn = plane_size
+    if not k_tile or k_tile <= 0:
+        # K tile dim unknown -> conservative whole-cycle scale (still ->identity at Sk=1)
+        return [max(1, math.ceil(c / Sk)) for c in cycle_list]
+    frac = k_tile / (k_tile + Sm + Sn)
+    scaled = []
+    for c in cycle_list:
+        scaled.append(int(math.ceil(c * frac / Sk + c * (1.0 - frac))))
+    logger.info("[3D-PE] Sk=%d, K_t=%d, plane=%d, frac_reduce=%.3f: cycles %s -> %s",
+                Sk, k_tile, plane_size, frac, cycle_list, scaled)
+    return scaled
 
 LOCK_TIMEOUT = 600
 
@@ -241,6 +270,12 @@ class MLIRCodeCache:
             # Run cyclesim
             cyclesim = CycleSimulator()
             cycle_list = cyclesim.compile_and_simulate(os.path.join(write_path, cycle_binary_name), vectorlane_size, silent_mode=silent_mode)
+
+            # 3D PE array: parallelize the K-reduction axis (Sk) on top of the
+            # gem5-measured 2D cycles. Sk=1 leaves cycle_list untouched.
+            # loop_size = [TOG_latency, TILE_N, TILE_K] -> K tile = loop_size[-1].
+            k_tile = kwargs['loop_size'][-1] if kwargs.get('loop_size') else None
+            cycle_list = _scale_cycles_for_3d_pe(cycle_list, k_tile, vectorlane_size)
 
             # Create TOG
             w_offset, x_offset = vectorlane_size, vectorlane_size

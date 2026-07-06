@@ -102,6 +102,13 @@ def __getattr__(name):
     if name == "pytorchsim_timing_mode":
         return config_yaml['pytorchsim_timing_mode']
 
+    # 3D PE array: depth of the K-reduction axis (Sk).
+    # Sk=1 => classic 2D systolic array (identical cycles to before).
+    # Sk>1 => the K reduction is parallelized across Sk PEs, so the
+    # reduction-dominated part of each GEMM tile's measured cycle shrinks ~1/Sk.
+    if name == "systolic_array_size_k":
+        return config_yaml.get("systolic_array_size_k", 1)
+
     # Mapping strategy
     if name == "codegen_mapping_strategy":
         codegen_mapping_strategy = config_yaml["codegen_mapping_strategy"]
@@ -223,13 +230,34 @@ def setup_logger(name=None, level=None):
 
     # Only configure if not already configured (avoid duplicate handlers)
     if not logger.handlers:
-        handler = logging.StreamHandler()
         formatter = logging.Formatter(
             fmt='[%(asctime)s.%(msecs)03d] [%(levelname)s] [%(name)s] %(message)s',
             datefmt='%Y-%m-%d %H:%M:%S'
         )
-        handler.setFormatter(formatter)
-        logger.addHandler(handler)
+
+        # Always output to stdout
+        stream_handler = logging.StreamHandler()
+        stream_handler.setFormatter(formatter)
+        logger.addHandler(stream_handler)
+
+        # ALSO output to log file in togsim_results
+        try:
+            log_dir = os.environ.get('TORCHSIM_LOG_PATH',
+                                    default=os.path.join(CONFIG_TORCHSIM_DIR, "togsim_results"))
+            os.makedirs(log_dir, exist_ok=True)
+
+            # Use a fixed log filename for each run (based on timestamp)
+            from datetime import datetime
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            import random
+            rand_suffix = ''.join(random.choices('0123456789abcdef', k=8))
+            log_filename = os.path.join(log_dir, f"{timestamp}_{rand_suffix}.log")
+
+            file_handler = logging.FileHandler(log_filename, mode='a')
+            file_handler.setFormatter(formatter)
+            logger.addHandler(file_handler)
+        except Exception as e:
+            print(f"[WARNING] Failed to setup file logging: {e}")
 
         # Set log level
         if level is None:
