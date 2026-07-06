@@ -105,59 +105,70 @@ def snapshot_log_files():
         pass
     return {}
 
-def get_new_log_file(before_snapshot, after_snapshot=None, max_retries=20, retry_delay=0.5, min_size=1000):
-    """Find the log file modified between two snapshots.
+def _log_has_metrics(path):
+    """Return True if the log file contains completed TOGSim metrics."""
+    try:
+        with open(path, 'r') as f:
+            content = f.read()
+        return 'Total execution cycles' in content
+    except Exception:
+        return False
 
-    Returns path to the log file that was created/modified with min_size bytes, or None if not found.
-    Waits for file to have sufficient content (Spike simulation completion).
+def get_new_log_file(before_snapshot, after_snapshot=None, max_retries=20, retry_delay=0.5, min_size=1000):
+    """Find the NEW log file (created/modified after before_snapshot) that contains
+    completed TOGSim metrics.
+
+    A single opt_fn() execution may create multiple log files (e.g. empty Gem5
+    stub files plus the real metrics file). We therefore prefer, among the newly
+    created/modified files, the one that actually contains 'Total execution cycles'.
+    We retry to give the (synchronous but file-buffered) TOGSim subprocess time to
+    flush its output to disk.
     """
+    import glob
     log_dir = get_log_dir()
 
-    # First pass: find newly created files
     for attempt in range(max_retries):
         try:
             if not os.path.exists(log_dir):
                 if attempt < max_retries - 1:
                     time.sleep(retry_delay)
                 continue
-            import glob
+
             current_files = glob.glob(os.path.join(log_dir, "*.log"))
-            after_snapshot = {}
+
+            # Collect files created/modified since the before-snapshot
+            modified_files = []
             for f in current_files:
                 try:
-                    after_snapshot[f] = os.path.getmtime(f)
+                    mtime_after = os.path.getmtime(f)
                 except OSError:
-                    pass
-
-            # Find files modified/created between snapshots
-            modified_files = []
-            for f_after, mtime_after in after_snapshot.items():
-                mtime_before = before_snapshot.get(f_after)
-                if mtime_before is None:
-                    # New file created
-                    modified_files.append((f_after, mtime_after))
-                elif mtime_after > mtime_before:
-                    # File modified
-                    modified_files.append((f_after, mtime_after))
+                    continue
+                mtime_before = before_snapshot.get(f)
+                if mtime_before is None or mtime_after > mtime_before:
+                    modified_files.append((f, mtime_after))
 
             if modified_files:
-                # Pick the most recently modified file
-                modified_log = max(modified_files, key=lambda x: x[1])[0]
+                # Prefer newest files first, but only accept ones with real metrics.
+                modified_files.sort(key=lambda x: x[1], reverse=True)
 
-                # Wait for file to have sufficient content (Spike completion)
-                for size_check in range(10):
-                    try:
-                        file_size = os.path.getsize(modified_log)
-                        if file_size >= min_size:
-                            return modified_log
-                    except OSError:
-                        pass
+                # 1) Best: a new file that already contains completed metrics
+                for f, _ in modified_files:
+                    if _log_has_metrics(f):
+                        return f
 
-                    if size_check < 9:
-                        time.sleep(0.2)
+                # 2) Otherwise, keep waiting for metrics to be flushed
+                if attempt < max_retries - 1:
+                    time.sleep(retry_delay)
+                    continue
 
-                # If size check times out, still return the file (it may have metrics)
-                return modified_log
+                # 3) Last resort on final attempt: return the largest new file
+                #    that meets the size threshold (may still be parseable)
+                sized = [(f, os.path.getsize(f)) for f, _ in modified_files
+                         if os.path.exists(f)]
+                sized = [(f, s) for f, s in sized if s >= min_size]
+                if sized:
+                    return max(sized, key=lambda x: x[1])[0]
+                return modified_files[0][0]
 
             if attempt < max_retries - 1:
                 time.sleep(retry_delay)
@@ -241,26 +252,24 @@ def find_togsim_log_in_stdout(stdout_content):
     return None
 
 def compile_with_stdout_capture(fn):
-    """Compile a function with torch.compile using snapshot-based log file detection.
+    """Compile a function with torch.compile and snapshot log files BEFORE execution.
 
-    Returns: (compiled_fn, log_file_path)
-    This uses before/after snapshots to reliably detect log file changes.
+    Returns: (compiled_fn, before_snapshot)
+
+    IMPORTANT: torch.compile() is LAZY - it only compiles, it does NOT execute.
+    The actual TOGSim simulation (and log file writing) happens when the compiled
+    function is CALLED (e.g. opt_fn(x1, w1)). Therefore we must NOT detect the log
+    file here. Instead we return the before-execution snapshot, and the caller must
+    call get_new_log_file(before_snapshot) AFTER invoking the compiled function.
     """
-    # Snapshot current log files BEFORE torch.compile
+    # Snapshot current log files BEFORE compile+execution.
+    # torch.compile itself does not run the simulation, so this snapshot correctly
+    # captures the pre-existing log files. The new log appears only after opt_fn().
     before_snapshot = snapshot_log_files()
 
     try:
-        # Compile the function
         compiled_fn = torch.compile(dynamic=False)(fn)
-
-        # Give filesystem time to sync
-        time.sleep(0.5)
-
-        # Find the log file that was created/modified
-        log_file = get_new_log_file(before_snapshot, max_retries=15, retry_delay=0.3)
-
-        return compiled_fn, log_file
-
+        return compiled_fn, before_snapshot
     except Exception as e:
         log_result(f"[ERROR] torch.compile failed: {e}")
         return None, None
@@ -416,18 +425,22 @@ def test_matmul(device, input_size=128, hidden_size=128, output_size=128):
 
     log_result(f"\n[DEBUG] test_matmul({input_size}x{hidden_size}x{output_size}) START (t={time.time()})")
 
-    # Compile with snapshot-based log file detection
-    opt_fn, log_file = compile_with_stdout_capture(custom_matmul)
+    # Compile (lazy) and snapshot log files BEFORE execution
+    opt_fn, before_snapshot = compile_with_stdout_capture(custom_matmul)
 
     if opt_fn is None:
         log_result(f"[ERROR] Failed to compile function")
         return
 
-    log_result(f"[DEBUG] torch.compile completed, waiting for log file...")
+    # ACTUAL execution: this is when TOGSim runs and writes the log file
+    res = opt_fn(x1, w1)
+
+    # Detect the log file created by THIS execution (after opt_fn, with size wait)
+    log_file = get_new_log_file(before_snapshot, max_retries=20, retry_delay=0.5)
+    log_result(f"[DEBUG] torch.compile+exec completed")
     if log_file:
         log_result(f"[DEBUG] Log file: {log_file}")
 
-    res = opt_fn(x1, w1)
     y = custom_matmul(x2, w2)
     test_result("Matmul Forward", res, y, m=input_size, n=output_size, k=hidden_size, log_file=log_file)
 
@@ -449,18 +462,22 @@ def test_addmm(device, input_size=128, hidden_size=128, output_size=128, bias_ra
 
     log_result(f"\n[DEBUG] test_addmm({input_size}x{hidden_size}x{output_size}) START (t={time.time()})")
 
-    # Compile with snapshot-based log file detection
-    opt_fn, log_file = compile_with_stdout_capture(custom_matmul)
+    # Compile (lazy) and snapshot log files BEFORE execution
+    opt_fn, before_snapshot = compile_with_stdout_capture(custom_matmul)
 
     if opt_fn is None:
         log_result(f"[ERROR] Failed to compile function")
         return
 
-    log_result(f"[DEBUG] torch.compile completed, waiting for log file...")
+    # ACTUAL execution: this is when TOGSim runs and writes the log file
+    res = opt_fn(b1, x1, w1)
+
+    # Detect the log file created by THIS execution (after opt_fn, with size wait)
+    log_file = get_new_log_file(before_snapshot, max_retries=20, retry_delay=0.5)
+    log_result(f"[DEBUG] torch.compile+exec completed")
     if log_file:
         log_result(f"[DEBUG] Log file: {log_file}")
 
-    res = opt_fn(b1, x1, w1)
     y = custom_matmul(b2, x2, w2)
     test_result("Addmm Forward", res, y, m=input_size, n=output_size, k=hidden_size, log_file=log_file)
 
@@ -482,18 +499,22 @@ def test_addmm2(device, input_size=128, hidden_size=128, output_size=128):
 
     log_result(f"\n[DEBUG] test_addmm2({input_size}x{hidden_size}x{output_size}) START (t={time.time()})")
 
-    # Compile with snapshot-based log file detection
-    opt_fn, log_file = compile_with_stdout_capture(custom_matmul)
+    # Compile (lazy) and snapshot log files BEFORE execution
+    opt_fn, before_snapshot = compile_with_stdout_capture(custom_matmul)
 
     if opt_fn is None:
         log_result(f"[ERROR] Failed to compile function")
         return
 
-    log_result(f"[DEBUG] torch.compile completed, waiting for log file...")
+    # ACTUAL execution: this is when TOGSim runs and writes the log file
+    res = opt_fn(b1, x1, w1)
+
+    # Detect the log file created by THIS execution (after opt_fn, with size wait)
+    log_file = get_new_log_file(before_snapshot, max_retries=20, retry_delay=0.5)
+    log_result(f"[DEBUG] torch.compile+exec completed")
     if log_file:
         log_result(f"[DEBUG] Log file: {log_file}")
 
-    res = opt_fn(b1, x1, w1)
     y = custom_matmul(b2, x2, w2)
     test_result("Addmm2 Forward", res, y, m=input_size, n=output_size, k=hidden_size, log_file=log_file)
 
@@ -518,18 +539,22 @@ def test_linear(device, input_size=128, hidden_size=128, output_size=128):
 
     log_result(f"\n[DEBUG] test_linear({input_size}x{hidden_size}x{output_size}) START (t={time.time()})")
 
-    # Compile with snapshot-based log file detection
-    opt_fn, log_file = compile_with_stdout_capture(custom_linear)
+    # Compile (lazy) and snapshot log files BEFORE execution
+    opt_fn, before_snapshot = compile_with_stdout_capture(custom_linear)
 
     if opt_fn is None:
         log_result(f"[ERROR] Failed to compile function")
         return
 
-    log_result(f"[DEBUG] torch.compile completed, waiting for log file...")
+    # ACTUAL execution: this is when TOGSim runs and writes the log file
+    res = opt_fn(x1, w1, b1)
+
+    # Detect the log file created by THIS execution (after opt_fn, with size wait)
+    log_file = get_new_log_file(before_snapshot, max_retries=20, retry_delay=0.5)
+    log_result(f"[DEBUG] torch.compile+exec completed")
     if log_file:
         log_result(f"[DEBUG] Log file: {log_file}")
 
-    res = opt_fn(x1, w1, b1)
     y = custom_linear(x2, w2, b2)
     test_result("Linear Forward", res, y, m=input_size, n=output_size, k=hidden_size, log_file=log_file)
 
