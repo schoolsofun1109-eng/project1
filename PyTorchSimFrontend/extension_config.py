@@ -56,11 +56,41 @@ def __getattr__(name):
     if name == "vpu_num_lanes":
         return config_yaml["vpu_num_lanes"]
     if name == "CONFIG_SPAD_INFO":
-        return {
-          "spad_vaddr" : 0xD0000000,
-          "spad_paddr" : 0x2000000000,
-          "spad_size" : config_yaml["vpu_spad_size_kb_per_lane"] << 10 # Note: spad size per lane
-        }
+        # Check if IMEM/WMEM/OMEM are configured
+        if "imem_num_banks" in config_yaml:
+            imem_size = config_yaml["imem_num_banks"] * (config_yaml["imem_sram_bitwidth"] // 8) * config_yaml["imem_sram_depth"]
+            wmem_size = config_yaml["wmem_num_banks"] * (config_yaml["wmem_sram_bitwidth"] // 8) * config_yaml["wmem_sram_depth"]
+            omem_size = config_yaml["omem_num_banks"] * (config_yaml["omem_sram_bitwidth"] // 8) * config_yaml["omem_sram_depth"]
+
+            sections_total = imem_size + wmem_size + omem_size
+            min_size = 2 * sections_total
+            spad_size_bytes = 1
+            while spad_size_bytes < min_size:
+                spad_size_bytes <<= 1
+
+            imem_vaddr = 0xD0000000
+            wmem_vaddr = imem_vaddr + imem_size
+            omem_vaddr = wmem_vaddr + wmem_size
+
+            return {
+              "spad_vaddr" : imem_vaddr,
+              "spad_paddr" : 0x2000000000,
+              "spad_size" : spad_size_bytes,
+              "spad_total_size" : sections_total,
+              "imem_vaddr" : imem_vaddr,
+              "imem_size" : imem_size,
+              "wmem_vaddr" : wmem_vaddr,
+              "wmem_size" : wmem_size,
+              "omem_vaddr" : omem_vaddr,
+              "omem_size" : omem_size
+            }
+        else:
+            # Fallback to unified SRAM mode
+            return {
+              "spad_vaddr" : 0xD0000000,
+              "spad_paddr" : 0x2000000000,
+              "spad_size" : config_yaml["vpu_spad_size_kb_per_lane"] << 10
+            }
 
     if name == "CONFIG_NUM_CORES":
         return config_yaml["num_cores"]

@@ -1,15 +1,38 @@
 import torch
 import os
 import re
+import sys
+import time
 from datetime import datetime
+
+# Initialize config paths at module load time
+sys.path.insert(0, '/workspace/PyTorchSim')
+try:
+    from PyTorchSimFrontend import extension_config
+    LOG_DIR = extension_config.CONFIG_TORCHSIM_LOG_PATH
+except Exception:
+    LOG_DIR = "/workspace/PyTorchSim/togsim_results"
 
 # Global results list
 RESULTS = []
 RESULTS_FILE = None
+LAST_LOG_FILE = None
+
+def get_log_dir():
+    """Get the log directory with multiple fallbacks."""
+    log_dir = os.environ.get('TORCHSIM_LOG_PATH')
+    if not log_dir:
+        try:
+            sys.path.insert(0, '/workspace/PyTorchSim')
+            from PyTorchSimFrontend import extension_config
+            log_dir = extension_config.CONFIG_TORCHSIM_LOG_PATH
+        except:
+            log_dir = "/workspace/PyTorchSim/togsim_results"
+    return log_dir
 
 def init_results_file():
     global RESULTS_FILE
-    results_dir = "/workspace/PyTorchSim/togsim_results"
+    results_dir = LOG_DIR
     os.makedirs(results_dir, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     RESULTS_FILE = os.path.join(results_dir, f"test_results_{timestamp}.txt")
@@ -26,7 +49,152 @@ def log_result(text):
             f.write(text + "\n")
     print(text)
 
-def test_result(name, out, cpu_out, rtol=1e-4, atol=1e-4, m=None, n=None, k=None):
+def snapshot_log_files():
+    """Create a snapshot of current log files with their modification times.
+
+    Returns a dict mapping log file paths to their mtime values.
+    Used to detect which files were modified during torch.compile.
+    """
+    log_dir = get_log_dir()
+    try:
+        if os.path.exists(log_dir):
+            import glob
+            log_files = glob.glob(os.path.join(log_dir, "*.log"))
+            snapshot = {}
+            for f in log_files:
+                try:
+                    snapshot[f] = os.path.getmtime(f)
+                except OSError:
+                    pass
+            return snapshot
+    except Exception:
+        pass
+    return {}
+
+def get_new_log_file(before_snapshot, max_retries=5, retry_delay=0.2):
+    """Find the log file with modified timestamp by comparing with a previous snapshot.
+
+    Args:
+        before_snapshot: Dict of log file paths and their mtimes from before test execution
+        max_retries: Number of times to retry if no modified file is found
+        retry_delay: Delay in seconds between retries
+
+    Returns:
+        Path to the log file that was modified, or None if not found.
+
+    This finds which log file was updated (mtime changed) during torch.compile,
+    indicating it was written to during this specific test execution.
+    """
+    log_dir = get_log_dir()
+
+    for attempt in range(max_retries):
+        try:
+            if not os.path.exists(log_dir):
+                if attempt < max_retries - 1:
+                    time.sleep(retry_delay)
+                continue
+
+            import glob
+            current_files = glob.glob(os.path.join(log_dir, "*.log"))
+
+            # Find files with changed mtime
+            modified_files = []
+            for f in current_files:
+                try:
+                    current_mtime = os.path.getmtime(f)
+                    old_mtime = before_snapshot.get(f, -1)
+
+                    # If file exists in snapshot but mtime changed, it was modified
+                    if f in before_snapshot and current_mtime > old_mtime:
+                        modified_files.append((f, current_mtime))
+                        print(f"[DEBUG] File modified: {os.path.basename(f)}")
+                except OSError:
+                    pass
+
+            if modified_files:
+                # Pick the most recently modified file
+                modified_log = max(modified_files, key=lambda x: x[1])[0]
+                print(f"[DEBUG] Returning modified: {os.path.basename(modified_log)}")
+                return modified_log
+
+            print(f"[DEBUG] Attempt {attempt+1}: Found {len(modified_files)} modified files")
+
+            # No modified files yet, retry
+            if attempt < max_retries - 1:
+                time.sleep(retry_delay)
+        except Exception as e:
+            print(f"[DEBUG] Exception in get_new_log_file: {str(e)}")
+            if attempt < max_retries - 1:
+                time.sleep(retry_delay)
+
+    print(f"[DEBUG] get_new_log_file returning None after {max_retries} attempts")
+    return None
+
+def extract_cycle_from_log(log_file_path):
+    """Extract 'Total execution cycles' from TOGSim log file."""
+    try:
+        if not os.path.exists(log_file_path):
+            return None
+        with open(log_file_path, 'r') as f:
+            content = f.read()
+            match = re.search(r'Total execution cycles:\s*(\d+)', content)
+            if match:
+                return int(match.group(1))
+    except Exception as e:
+        pass
+    return None
+
+def get_latest_log_file(max_retries=5, retry_delay=0.2):
+    """DEPRECATED: Use snapshot_log_files() and get_new_log_file() instead.
+
+    This function is kept for backward compatibility but should not be used
+    for new code. The snapshot-based approach is more reliable and doesn't
+    suffer from race conditions with modification times.
+    """
+    global LAST_LOG_FILE
+
+    log_dir = get_log_dir()
+
+    for attempt in range(max_retries):
+        try:
+            if not os.path.exists(log_dir):
+                if attempt == max_retries - 1:
+                    return None
+                time.sleep(retry_delay)
+                continue
+
+            import glob
+            log_files = glob.glob(os.path.join(log_dir, "*.log"))
+            if log_files:
+                latest = max(log_files, key=os.path.getmtime)
+                LAST_LOG_FILE = latest
+                return latest
+
+            # No files found yet, retry if not last attempt
+            if attempt < max_retries - 1:
+                time.sleep(retry_delay)
+        except Exception as e:
+            if attempt == max_retries - 1:
+                return None
+            time.sleep(retry_delay)
+
+    return None
+
+def test_result(name, out, cpu_out, rtol=1e-4, atol=1e-4, m=None, n=None, k=None, log_file=None):
+    """Verify test result and extract simulation metrics from log file.
+
+    Args:
+        name: Test name for output
+        out: Output from NPU computation
+        cpu_out: Output from CPU computation
+        rtol: Relative tolerance for allclose check
+        atol: Absolute tolerance for allclose check
+        m, n, k: Matrix dimensions for logging
+        log_file: Path to the TOGSim log file for this specific test.
+                  Should be obtained from get_new_log_file() after torch.compile.
+    """
+    global LAST_LOG_FILE
+
     # Calculate differences for verification
     diff_detail = (out.cpu() - cpu_out).abs()
     rel_diff = diff_detail / (cpu_out.abs() + 1e-8)
@@ -40,65 +208,64 @@ def test_result(name, out, cpu_out, rtol=1e-4, atol=1e-4, m=None, n=None, k=None
         log_result(message)
         log_result("-" * len(message))
 
-        # Print matrix dimensions and result statistics
+        # Print matrix dimensions and input values
         if m is not None and n is not None and k is not None:
-            log_result(f"Matrix: {m}×{k}×{n}")
+            log_result(f"Matrix shape: {m}×{k} × {k}×{n} → {m}×{n}")
+
+            # Print sample input values
+            log_result(f"Input (X) first 3 values: {out.cpu().flatten()[:3].tolist()}")
+            log_result(f"CPU  (Y) first 3 values: {cpu_out.flatten()[:3].tolist()}")
 
             # Compare CPU vs NPU outputs
             npu_sum = out.sum().item()
             cpu_sum = cpu_out.sum().item()
-            log_result(f"NPU Output sum: {npu_sum:.4f}")
-            log_result(f"CPU Output sum: {cpu_sum:.4f}")
-            log_result(f"Sum match: {abs(npu_sum - cpu_sum) < 0.01}")
-
-            log_result(f"NPU Output min: {out.min().item():.4f}, max: {out.max().item():.4f}")
-            log_result(f"CPU Output min: {cpu_out.min().item():.4f}, max: {cpu_out.max().item():.4f}")
+            log_result(f"NPU sum: {npu_sum:.6f}, CPU sum: {cpu_sum:.6f}")
 
             # Print difference analysis
-            log_result("")
-            log_result("=== 정밀도 분석 (Precision Analysis) ===")
-            log_result(f"Max absolute difference: {max_abs_diff:.6e}")
-            log_result(f"Max relative difference: {max_rel_diff:.6e}")
-            log_result(f"Mean absolute difference: {mean_abs_diff:.6e}")
-            log_result(f"Output shape: {out.shape}, dtype: {out.dtype}")
-            log_result(f"NPU first 5: {out.cpu().flatten()[:5]}")
-            log_result(f"CPU first 5: {cpu_out.flatten()[:5]}")
+            log_result("=== Precision Analysis ===")
+            log_result(f"Max abs diff: {max_abs_diff:.6e}")
+            log_result(f"Max rel diff: {max_rel_diff:.6e}")
+            log_result(f"Mean abs diff: {mean_abs_diff:.6e}")
 
-            # Print full tensor output
-            log_result(f"custom out: {out.cpu()}")
-            log_result(f"cpu out: {cpu_out}")
-
-        # Print performance metrics summary
+        # Extract performance metrics from TOGSim log
         log_result("")
-        log_result("SIMULATION RESULTS:")
+        log_result("=== SIMULATION METRICS ===")
 
-        # Try to extract performance metrics from TOGSim log
-        try:
-            log_dir = "/workspace/PyTorchSim/togsim_results"
-            if os.path.exists(log_dir):
-                # Find latest log file
-                import glob
-                log_files = glob.glob(os.path.join(log_dir, "*.log"))
-                if log_files:
-                    latest_log = max(log_files, key=os.path.getctime)
-                    log_result(f"Log file: {os.path.basename(latest_log)}")
+        # If no log file provided, fall back to deprecated get_latest_log_file
+        if log_file is None:
+            # Wait for log file to be written (test execution + file I/O)
+            time.sleep(1.0)
+            log_file = get_latest_log_file(max_retries=5, retry_delay=0.2)
 
-                    with open(latest_log, 'r') as f:
-                        content = f.read()
+        if log_file:
+            log_result(f"Log: {os.path.basename(log_file)}")
 
-                        # Extract metrics using proper regex patterns
-                        cycles_match = re.search(r'Total execution cycles: (\d+)', content)
-                        systolic_match = re.search(r'Systolic array \[0\] utilization\(%\): ([\d.]+)', content)
-                        bw_match = re.search(r'channels 0\.\.15 combined.*?(\d+\.?\d*) GB/s', content)
+            # Update tracked log file
+            LAST_LOG_FILE = log_file
 
-                        if cycles_match:
-                            log_result(f"Total cycles:     {cycles_match.group(1):>10}")
-                        if systolic_match:
-                            log_result(f"Systolic [0]:     {systolic_match.group(1):>10}%")
-                        if bw_match:
-                            log_result(f"DRAM BW:          {bw_match.group(1):>10} GB/s")
-        except Exception as e:
-            log_result(f"(Performance metrics unavailable: {str(e)})")
+            # Extract cycle count
+            cycles = extract_cycle_from_log(log_file)
+            if cycles is not None:
+                log_result(f"Cycles: {cycles}")
+            else:
+                log_result("(Cycles: not found in log)")
+
+            # Try to extract other metrics
+            try:
+                with open(log_file, 'r') as f:
+                    content = f.read()
+
+                    systolic_match = re.search(r'Systolic array \[0\] utilization\(%\): ([\d.]+)', content)
+                    bw_match = re.search(r'channels 0\.\.15 combined.*?(\d+\.?\d*) GB/s', content)
+
+                    if systolic_match:
+                        log_result(f"Systolic util: {systolic_match.group(1)}%")
+                    if bw_match:
+                        log_result(f"DRAM BW: {bw_match.group(1)} GB/s")
+            except Exception as e:
+                log_result(f"(Metrics extraction error: {str(e)})")
+        else:
+            log_result("(No log file found - test may not have executed)")
 
         log_result("")
 
@@ -107,14 +274,17 @@ def test_result(name, out, cpu_out, rtol=1e-4, atol=1e-4, m=None, n=None, k=None
         log_result("-" * len(message))
         log_result(message)
         log_result("-" * len(message))
+        log_result(f"Shape: NPU {out.shape} vs CPU {cpu_out.shape}")
         log_result("custom out: " + str(out.cpu()))
         log_result("cpu out: " + str(cpu_out))
         log_result(f"Results saved to: {RESULTS_FILE}")
         exit(1)
 
 def test_matmul(device, input_size=128, hidden_size=128, output_size=128):
+    """Test matrix multiplication with snapshot-based log tracking."""
     def custom_matmul(a, b):
         return torch.matmul(a, b)
+
     torch.manual_seed(0)
     input = torch.randn(input_size, hidden_size)
     weight = torch.randn(hidden_size, output_size)
@@ -122,14 +292,24 @@ def test_matmul(device, input_size=128, hidden_size=128, output_size=128):
     w1 = weight.to(device=device)
     x2 = input.to("cpu")
     w2 = weight.to("cpu")
+
+    # Snapshot log files BEFORE torch.compile to reliably identify new logs
+    before_logs = snapshot_log_files()
+
     opt_fn = torch.compile(dynamic=False)(custom_matmul)
     res = opt_fn(x1, w1)
+
+    # Find the log file created by this specific test execution
+    log_file = get_new_log_file(before_logs, max_retries=5, retry_delay=0.2)
+
     y = custom_matmul(x2, w2)
-    test_result("Matmul Forward", res, y, m=input_size, n=output_size, k=hidden_size)
+    test_result("Matmul Forward", res, y, m=input_size, n=output_size, k=hidden_size, log_file=log_file)
 
 def test_addmm(device, input_size=128, hidden_size=128, output_size=128, bias_rank=1):
+    """Test addmm operation with snapshot-based log tracking."""
     def custom_matmul(bias, a, b):
         return torch.addmm(bias, a, b)
+
     torch.manual_seed(0)
     input = torch.randn(input_size, hidden_size)
     weight = torch.randn(hidden_size, output_size)
@@ -140,14 +320,24 @@ def test_addmm(device, input_size=128, hidden_size=128, output_size=128, bias_ra
     x2 = input.to("cpu")
     w2 = weight.to("cpu")
     b2 = bias.to("cpu")
+
+    # Snapshot log files BEFORE torch.compile
+    before_logs = snapshot_log_files()
+
     opt_fn = torch.compile(dynamic=False)(custom_matmul)
     res = opt_fn(b1, x1, w1)
+
+    # Find the log file created by this specific test execution
+    log_file = get_new_log_file(before_logs, max_retries=5, retry_delay=0.2)
+
     y = custom_matmul(b2, x2, w2)
-    test_result("Addmm Forward", res, y, m=input_size, n=output_size, k=hidden_size)
+    test_result("Addmm Forward", res, y, m=input_size, n=output_size, k=hidden_size, log_file=log_file)
 
 def test_addmm2(device, input_size=128, hidden_size=128, output_size=128):
+    """Test matmul operation variant with snapshot-based log tracking."""
     def custom_matmul(bias, a, b):
         return torch.matmul(a, b) #+ bias
+
     torch.manual_seed(0)
     input = torch.randn(input_size, hidden_size)
     weight = torch.randn(hidden_size, output_size)
@@ -158,17 +348,27 @@ def test_addmm2(device, input_size=128, hidden_size=128, output_size=128):
     x2 = input.to("cpu")
     w2 = weight.to("cpu")
     b2 = bias.to("cpu")
+
+    # Snapshot log files BEFORE torch.compile
+    before_logs = snapshot_log_files()
+
     opt_fn = torch.compile(dynamic=False)(custom_matmul)
     res = opt_fn(b1, x1, w1)
+
+    # Find the log file created by this specific test execution
+    log_file = get_new_log_file(before_logs, max_retries=5, retry_delay=0.2)
+
     y = custom_matmul(b2, x2, w2)
-    test_result("Addmm2 Forward", res, y, m=input_size, n=output_size, k=hidden_size)
+    test_result("Addmm2 Forward", res, y, m=input_size, n=output_size, k=hidden_size, log_file=log_file)
 
 def test_linear(device, input_size=128, hidden_size=128, output_size=128):
+    """Test linear layer operation with snapshot-based log tracking."""
     def custom_linear(a, b, bias):
         linear = torch.nn.Linear(hidden_size, output_size)
         linear.weight = torch.nn.Parameter(b)
         linear.bias = torch.nn.Parameter(bias)
         return linear(a)
+
     torch.manual_seed(0)
     input = torch.randn(input_size, hidden_size)
     weight = torch.randn(output_size, hidden_size)
@@ -179,13 +379,46 @@ def test_linear(device, input_size=128, hidden_size=128, output_size=128):
     x2 = input.to("cpu")
     w2 = weight.to("cpu")
     b2 = bias.to("cpu")
+
+    # Snapshot log files BEFORE torch.compile
+    before_logs = snapshot_log_files()
+
     opt_fn = torch.compile(dynamic=False)(custom_linear)
     res = opt_fn(x1, w1, b1)
+
+    # Find the log file created by this specific test execution
+    log_file = get_new_log_file(before_logs, max_retries=5, retry_delay=0.2)
+
     y = custom_linear(x2, w2, b2)
-    test_result("Linear Forward", res, y, m=input_size, n=output_size, k=hidden_size)
+    test_result("Linear Forward", res, y, m=input_size, n=output_size, k=hidden_size, log_file=log_file)
 
 if __name__ == "__main__":
     init_results_file()
+
+    # Print CONFIG information
+    try:
+        sys.path.insert(0, '/workspace/PyTorchSim')
+        from extension_config import CONFIG_SPAD_INFO, CONFIG
+        log_result("=" * 80)
+        log_result("CONFIGURATION INFO")
+        log_result("=" * 80)
+        if CONFIG_SPAD_INFO:
+            log_result(f"IMEM: vaddr={hex(CONFIG_SPAD_INFO.get('imem_vaddr', 0))}, "
+                      f"size={CONFIG_SPAD_INFO.get('imem_size', 0)} bytes")
+            log_result(f"WMEM: vaddr={hex(CONFIG_SPAD_INFO.get('wmem_vaddr', 0))}, "
+                      f"size={CONFIG_SPAD_INFO.get('wmem_size', 0)} bytes")
+            log_result(f"OMEM: vaddr={hex(CONFIG_SPAD_INFO.get('omem_vaddr', 0))}, "
+                      f"size={CONFIG_SPAD_INFO.get('omem_size', 0)} bytes")
+            log_result(f"Total scratchpad: {CONFIG_SPAD_INFO.get('spad_total_size', 0)} bytes")
+            log_result(f"Scratchpad size (Spike): {CONFIG_SPAD_INFO.get('spad_size', 0)} bytes")
+        if CONFIG:
+            log_result(f"VPU lanes: {CONFIG.get('vpu_num_lanes', 'N/A')}")
+        log_result("=" * 80)
+        log_result("")
+    except Exception as e:
+        log_result(f"(Config unavailable: {str(e)})")
+        log_result("")
+
     device = torch.device("npu:0")
     test_matmul(device, 32, 32, 32)
     test_matmul(device, 128, 128, 128)
