@@ -8,26 +8,39 @@ import torch
 import re
 import time
 from datetime import datetime
+from io import StringIO
+from contextlib import redirect_stdout
 
 # Initialize config paths at module load time
 sys.path.insert(0, '/workspace/PyTorchSim')
 
 # CRITICAL: Register npu device and backend (required for torch.compile to use npu)
 # Try multiple import paths (user's local code, container's installed package, etc.)
+print("[STARTUP] Attempting to register NPU device...")
 npu_registered = False
 for import_path in [
     'PyTorchSimDevice.torch_openreg',  # From /workspace or installed package
 ]:
     try:
+        print(f"[STARTUP] Trying import path: {import_path}")
         __import__(import_path)
-        print(f"[INFO] NPU device registered via {import_path}")
+        print(f"[STARTUP] ✓ NPU device registered via {import_path}")
         npu_registered = True
         break
     except Exception as e:
-        print(f"[INFO] Could not register npu via {import_path}: {e}")
+        print(f"[STARTUP] ✗ Could not register npu via {import_path}: {e}")
 
-if not npu_registered:
-    print("[WARNING] NPU device not registered - tests will run on CPU")
+if npu_registered:
+    print("[STARTUP] ✓ NPU device is available")
+    available_devices = torch.cuda.device_count() if torch.cuda.is_available() else 0
+    print(f"[STARTUP] CUDA available: {torch.cuda.is_available()}, count: {available_devices}")
+    try:
+        npu_dev = torch.device('npu:0')
+        print(f"[STARTUP] ✓ NPU device object created: {npu_dev}")
+    except Exception as e:
+        print(f"[STARTUP] ✗ Failed to create npu:0 device: {e}")
+else:
+    print("[STARTUP] ✗ NPU device NOT registered - tests will run on CPU")
 
 try:
     from PyTorchSimFrontend import extension_config
@@ -71,23 +84,82 @@ def log_result(text):
             f.write(text + "\n")
     print(text)
 
-def get_log_file_after_timestamp(start_time, max_retries=20, retry_delay=0.5):
-    """Find log file modified after start_time (timestamp-based detection).
-
-    This is the most reliable method: it finds any file whose mtime >= start_time,
-    which is guaranteed to be modified after the test started.
-
-    Args:
-        start_time: Unix timestamp when the test execution started
-        max_retries: Number of times to retry if no file found
-        retry_delay: Delay between retries
-
-    Returns:
-        Path to the log file modified after start_time, or None if not found.
+def snapshot_log_files():
+    """Create a snapshot of current log files with their modification times.
+    Returns a dict mapping log file paths to their mtime values.
     """
     log_dir = get_log_dir()
+    try:
+        if os.path.exists(log_dir):
+            import glob
+            log_files = glob.glob(os.path.join(log_dir, "*.log"))
+            snapshot = {}
+            for f in log_files:
+                try:
+                    mtime = os.path.getmtime(f)
+                    snapshot[f] = mtime
+                except OSError:
+                    pass
+            return snapshot
+    except Exception as e:
+        pass
+    return {}
 
-    initial_sizes = {}
+def get_new_log_file(before_snapshot, after_snapshot=None, max_retries=10, retry_delay=0.5):
+    """Find the log file modified between two snapshots.
+
+    Returns path to the log file that was created/modified, or None if not found.
+    """
+    if after_snapshot is None:
+        log_dir = get_log_dir()
+        for attempt in range(max_retries):
+            try:
+                if not os.path.exists(log_dir):
+                    if attempt < max_retries - 1:
+                        time.sleep(retry_delay)
+                    continue
+                import glob
+                current_files = glob.glob(os.path.join(log_dir, "*.log"))
+                after_snapshot = {}
+                for f in current_files:
+                    try:
+                        after_snapshot[f] = os.path.getmtime(f)
+                    except OSError:
+                        pass
+                if after_snapshot:
+                    break
+            except Exception:
+                if attempt < max_retries - 1:
+                    time.sleep(retry_delay)
+
+    if not after_snapshot:
+        return None
+
+    # Find files modified/created between snapshots
+    modified_files = []
+    for f_after, mtime_after in after_snapshot.items():
+        mtime_before = before_snapshot.get(f_after)
+        if mtime_before is None:
+            modified_files.append((f_after, mtime_after))
+        elif mtime_after > mtime_before:
+            modified_files.append((f_after, mtime_after))
+
+    if modified_files:
+        modified_log = max(modified_files, key=lambda x: x[1])[0]
+        return modified_log
+
+    return None
+
+def get_log_file_after_timestamp(start_time, max_retries=60, retry_delay=0.2):
+    """Find log file created/modified AFTER test start_time.
+
+    Simple & precise: find files with metrics (>500 bytes) AND mtime >= start_time - 1.0
+    """
+    log_dir = get_log_dir()
+    import glob
+
+    # Allow 1 second slack for clock differences
+    time_threshold = start_time - 1.0
 
     for attempt in range(max_retries):
         try:
@@ -96,47 +168,32 @@ def get_log_file_after_timestamp(start_time, max_retries=20, retry_delay=0.5):
                     time.sleep(retry_delay)
                 continue
 
-            import glob
             log_files = glob.glob(os.path.join(log_dir, "*.log"))
 
-            # On first attempt, record initial sizes
-            if not initial_sizes:
-                for f in log_files:
-                    try:
-                        initial_sizes[f] = os.path.getsize(f)
-                    except OSError:
-                        pass
-
-            # Find files that grew (size increased) since start_time
-            growing_files = []
+            # Find files: WITH metrics AND created/modified after test started
+            candidate_files = []
             for f in log_files:
                 try:
-                    current_size = os.path.getsize(f)
-                    initial_size = initial_sizes.get(f, current_size)
+                    size = os.path.getsize(f)
                     mtime = os.path.getmtime(f)
-
-                    # File grew OR mtime is after start_time
-                    if current_size > initial_size or mtime >= start_time:
-                        growing_files.append((f, current_size, mtime))
+                    # File must have metrics (>500 bytes) AND be created after test start
+                    if size >= 500 and mtime >= time_threshold:
+                        candidate_files.append((f, mtime))
                 except OSError:
                     pass
 
-            if growing_files:
-                # Pick file with most recent mtime
-                latest_log = max(growing_files, key=lambda x: x[2])[0]
-                size_change = os.path.getsize(latest_log) - initial_sizes.get(latest_log, 0)
-                print(f"[LOG_DETECT] ✅ Found: {os.path.basename(latest_log)} (size +{size_change} bytes, mtime={os.path.getmtime(latest_log):.2f})")
+            if candidate_files:
+                # Pick the MOST RECENT file (most recent mtime)
+                latest_log = max(candidate_files, key=lambda x: x[1])[0]
                 return latest_log
 
             if attempt < max_retries - 1:
                 time.sleep(retry_delay)
 
         except Exception as e:
-            print(f"[LOG_DETECT] Error: {e}")
             if attempt < max_retries - 1:
                 time.sleep(retry_delay)
 
-    print(f"[LOG_DETECT] ❌ No log file found after {start_time:.2f} (after {max_retries} retries)")
     return None
 
 def extract_cycle_from_log(log_file_path):
@@ -155,6 +212,41 @@ def extract_cycle_from_log(log_file_path):
     except Exception as e:
         pass
     return None
+
+def find_togsim_log_in_stdout(stdout_content):
+    """Parse TOGSim log file path from stdout.
+
+    TOGSim outputs: "[TOGSim] Simulation log is stored to "/path/to/YYYYMMDD_HHMMSS_XXXXXXXX.log""
+    """
+    match = re.search(r'\[TOGSim\] Simulation log is stored to "([^"]+)"', stdout_content)
+    if match:
+        return match.group(1)
+    return None
+
+def compile_with_stdout_capture(fn):
+    """Compile a function with torch.compile using snapshot-based log file detection.
+
+    Returns: (compiled_fn, log_file_path)
+    This uses before/after snapshots to reliably detect log file changes.
+    """
+    # Snapshot current log files BEFORE torch.compile
+    before_snapshot = snapshot_log_files()
+
+    try:
+        # Compile the function
+        compiled_fn = torch.compile(dynamic=False)(fn)
+
+        # Give filesystem time to sync
+        time.sleep(0.5)
+
+        # Find the log file that was created/modified
+        log_file = get_new_log_file(before_snapshot, max_retries=15, retry_delay=0.3)
+
+        return compiled_fn, log_file
+
+    except Exception as e:
+        log_result(f"[ERROR] torch.compile failed: {e}")
+        return None, None
 
 def get_latest_log_file(max_retries=5, retry_delay=0.2):
     """DEPRECATED: Use snapshot_log_files() and get_new_log_file() instead.
@@ -293,7 +385,7 @@ def test_result(name, out, cpu_out, rtol=1e-4, atol=1e-4, m=None, n=None, k=None
         exit(1)
 
 def test_matmul(device, input_size=128, hidden_size=128, output_size=128):
-    """Test matrix multiplication with timestamp-based log file detection."""
+    """Test matrix multiplication with snapshot-based log file detection."""
     def custom_matmul(a, b):
         return torch.matmul(a, b)
 
@@ -305,17 +397,25 @@ def test_matmul(device, input_size=128, hidden_size=128, output_size=128):
     x2 = input.to("cpu")
     w2 = weight.to("cpu")
 
-    # Removed timestamp tracking - use log file content instead
-    opt_fn = torch.compile(dynamic=False)(custom_matmul)
+    log_result(f"\n[DEBUG] test_matmul({input_size}x{hidden_size}x{output_size}) START (t={time.time()})")
+
+    # Compile with snapshot-based log file detection
+    opt_fn, log_file = compile_with_stdout_capture(custom_matmul)
+
+    if opt_fn is None:
+        log_result(f"[ERROR] Failed to compile function")
+        return
+
+    log_result(f"[DEBUG] torch.compile completed, waiting for log file...")
+    if log_file:
+        log_result(f"[DEBUG] Log file: {log_file}")
+
     res = opt_fn(x1, w1)
-
-    log_file = None  # Let test_result fallback to get_latest_log_file
-
     y = custom_matmul(x2, w2)
     test_result("Matmul Forward", res, y, m=input_size, n=output_size, k=hidden_size, log_file=log_file)
 
 def test_addmm(device, input_size=128, hidden_size=128, output_size=128, bias_rank=1):
-    """Test addmm operation with snapshot-based log tracking."""
+    """Test addmm operation with stdout-based log tracking."""
     def custom_matmul(bias, a, b):
         return torch.addmm(bias, a, b)
 
@@ -330,17 +430,25 @@ def test_addmm(device, input_size=128, hidden_size=128, output_size=128, bias_ra
     w2 = weight.to("cpu")
     b2 = bias.to("cpu")
 
-    # Removed timestamp tracking - use log file content instead
-    opt_fn = torch.compile(dynamic=False)(custom_matmul)
+    log_result(f"\n[DEBUG] test_addmm({input_size}x{hidden_size}x{output_size}) START (t={time.time()})")
+
+    # Compile with snapshot-based log file detection
+    opt_fn, log_file = compile_with_stdout_capture(custom_matmul)
+
+    if opt_fn is None:
+        log_result(f"[ERROR] Failed to compile function")
+        return
+
+    log_result(f"[DEBUG] torch.compile completed, waiting for log file...")
+    if log_file:
+        log_result(f"[DEBUG] Log file: {log_file}")
+
     res = opt_fn(b1, x1, w1)
-
-    log_file = None  # Let test_result fallback to get_latest_log_file
-
     y = custom_matmul(b2, x2, w2)
     test_result("Addmm Forward", res, y, m=input_size, n=output_size, k=hidden_size, log_file=log_file)
 
 def test_addmm2(device, input_size=128, hidden_size=128, output_size=128):
-    """Test matmul operation variant with snapshot-based log tracking."""
+    """Test matmul operation variant with stdout-based log tracking."""
     def custom_matmul(bias, a, b):
         return torch.matmul(a, b) #+ bias
 
@@ -355,17 +463,25 @@ def test_addmm2(device, input_size=128, hidden_size=128, output_size=128):
     w2 = weight.to("cpu")
     b2 = bias.to("cpu")
 
-    # Removed timestamp tracking - use log file content instead
-    opt_fn = torch.compile(dynamic=False)(custom_matmul)
+    log_result(f"\n[DEBUG] test_addmm2({input_size}x{hidden_size}x{output_size}) START (t={time.time()})")
+
+    # Compile with snapshot-based log file detection
+    opt_fn, log_file = compile_with_stdout_capture(custom_matmul)
+
+    if opt_fn is None:
+        log_result(f"[ERROR] Failed to compile function")
+        return
+
+    log_result(f"[DEBUG] torch.compile completed, waiting for log file...")
+    if log_file:
+        log_result(f"[DEBUG] Log file: {log_file}")
+
     res = opt_fn(b1, x1, w1)
-
-    log_file = None  # Let test_result fallback to get_latest_log_file
-
     y = custom_matmul(b2, x2, w2)
     test_result("Addmm2 Forward", res, y, m=input_size, n=output_size, k=hidden_size, log_file=log_file)
 
 def test_linear(device, input_size=128, hidden_size=128, output_size=128):
-    """Test linear layer operation with timestamp-based log file detection."""
+    """Test linear layer operation with stdout-based log file detection."""
     def custom_linear(a, b, bias):
         linear = torch.nn.Linear(hidden_size, output_size)
         linear.weight = torch.nn.Parameter(b)
@@ -383,12 +499,20 @@ def test_linear(device, input_size=128, hidden_size=128, output_size=128):
     w2 = weight.to("cpu")
     b2 = bias.to("cpu")
 
-    # Removed timestamp tracking - use log file content instead
-    opt_fn = torch.compile(dynamic=False)(custom_linear)
+    log_result(f"\n[DEBUG] test_linear({input_size}x{hidden_size}x{output_size}) START (t={time.time()})")
+
+    # Compile with snapshot-based log file detection
+    opt_fn, log_file = compile_with_stdout_capture(custom_linear)
+
+    if opt_fn is None:
+        log_result(f"[ERROR] Failed to compile function")
+        return
+
+    log_result(f"[DEBUG] torch.compile completed, waiting for log file...")
+    if log_file:
+        log_result(f"[DEBUG] Log file: {log_file}")
+
     res = opt_fn(x1, w1, b1)
-
-    log_file = None  # Let test_result fallback to get_latest_log_file
-
     y = custom_linear(x2, w2, b2)
     test_result("Linear Forward", res, y, m=input_size, n=output_size, k=hidden_size, log_file=log_file)
 
