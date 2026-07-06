@@ -140,15 +140,18 @@ def get_log_file_after_timestamp(start_time, max_retries=20, retry_delay=0.5):
     return None
 
 def extract_cycle_from_log(log_file_path):
-    """Extract 'Total execution cycles' from TOGSim log file."""
+    """Extract the LAST 'Total execution cycles' from TOGSim log file.
+
+    Since tests append to the same log file, we need the last (most recent) cycle value.
+    """
     try:
         if not os.path.exists(log_file_path):
             return None
         with open(log_file_path, 'r') as f:
             content = f.read()
-            match = re.search(r'Total execution cycles:\s*(\d+)', content)
-            if match:
-                return int(match.group(1))
+            matches = re.findall(r'Total execution cycles:\s*(\d+)', content)
+            if matches:
+                return int(matches[-1])
     except Exception as e:
         pass
     return None
@@ -302,11 +305,11 @@ def test_matmul(device, input_size=128, hidden_size=128, output_size=128):
     x2 = input.to("cpu")
     w2 = weight.to("cpu")
 
-    test_start = time.time()
+    # Removed timestamp tracking - use log file content instead
     opt_fn = torch.compile(dynamic=False)(custom_matmul)
     res = opt_fn(x1, w1)
 
-    log_file = get_log_file_after_timestamp(test_start)
+    log_file = None  # Let test_result fallback to get_latest_log_file
 
     y = custom_matmul(x2, w2)
     test_result("Matmul Forward", res, y, m=input_size, n=output_size, k=hidden_size, log_file=log_file)
@@ -327,11 +330,11 @@ def test_addmm(device, input_size=128, hidden_size=128, output_size=128, bias_ra
     w2 = weight.to("cpu")
     b2 = bias.to("cpu")
 
-    test_start = time.time()
+    # Removed timestamp tracking - use log file content instead
     opt_fn = torch.compile(dynamic=False)(custom_matmul)
     res = opt_fn(b1, x1, w1)
 
-    log_file = get_log_file_after_timestamp(test_start)
+    log_file = None  # Let test_result fallback to get_latest_log_file
 
     y = custom_matmul(b2, x2, w2)
     test_result("Addmm Forward", res, y, m=input_size, n=output_size, k=hidden_size, log_file=log_file)
@@ -352,11 +355,11 @@ def test_addmm2(device, input_size=128, hidden_size=128, output_size=128):
     w2 = weight.to("cpu")
     b2 = bias.to("cpu")
 
-    test_start = time.time()
+    # Removed timestamp tracking - use log file content instead
     opt_fn = torch.compile(dynamic=False)(custom_matmul)
     res = opt_fn(b1, x1, w1)
 
-    log_file = get_log_file_after_timestamp(test_start)
+    log_file = None  # Let test_result fallback to get_latest_log_file
 
     y = custom_matmul(b2, x2, w2)
     test_result("Addmm2 Forward", res, y, m=input_size, n=output_size, k=hidden_size, log_file=log_file)
@@ -380,11 +383,11 @@ def test_linear(device, input_size=128, hidden_size=128, output_size=128):
     w2 = weight.to("cpu")
     b2 = bias.to("cpu")
 
-    test_start = time.time()
+    # Removed timestamp tracking - use log file content instead
     opt_fn = torch.compile(dynamic=False)(custom_linear)
     res = opt_fn(x1, w1, b1)
 
-    log_file = get_log_file_after_timestamp(test_start)
+    log_file = None  # Let test_result fallback to get_latest_log_file
 
     y = custom_linear(x2, w2, b2)
     test_result("Linear Forward", res, y, m=input_size, n=output_size, k=hidden_size, log_file=log_file)
