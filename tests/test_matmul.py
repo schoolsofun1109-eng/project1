@@ -385,11 +385,26 @@ def test_result(name, out, cpu_out, rtol=1e-4, atol=1e-4, m=None, n=None, k=None
                 with open(log_file, 'r') as f:
                     content = f.read()
 
-                    systolic_matches = re.findall(r'Systolic array \[0\] utilization\(%\): ([\d.]+)', content)
+                    # A core can have multiple systolic arrays (systolic_arrays_per_core).
+                    # Small workloads may run entirely on one array (e.g. array [1]),
+                    # leaving array [0] at 0% active_cycles. Reading only array [0] would
+                    # then wrongly report 0.00%. So we capture ALL arrays from the final
+                    # stats block and average their utilization.
+                    array_matches = re.findall(
+                        r'Systolic array \[(\d+)\] utilization\(%\): ([\d.]+)', content)
                     bw_matches = re.findall(r'channels 0\.\.15 combined.*?(\d+\.?\d*) GB/s', content)
 
-                    if systolic_matches:
-                        log_result(f"Systolic util: {systolic_matches[-1]}%")
+                    if array_matches:
+                        # Determine how many arrays per core (max index + 1),
+                        # then take the LAST full set (most recent kernel's stats).
+                        num_arrays = max(int(idx) for idx, _ in array_matches) + 1
+                        last_set = array_matches[-num_arrays:]
+                        utils = [float(v) for _, v in last_set]
+                        avg_util = sum(utils) / len(utils)
+                        # Report each array individually AND the average
+                        for idx, v in last_set:
+                            log_result(f"Systolic array [{idx}] util: {v}%")
+                        log_result(f"Systolic util (avg of {num_arrays} arrays): {avg_util:.2f}%")
                     if bw_matches:
                         log_result(f"DRAM BW: {bw_matches[-1]} GB/s")
             except Exception as e:
