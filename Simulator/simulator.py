@@ -627,8 +627,17 @@ class TOGSimulator():
             arr = re.findall(r'Systolic array \[(\d+)\] utilization\(%\): ([\d.]+)', content)
             vec = re.findall(r'Vector unit utilization\(%\): ([\d.]+)', content)
             bw = re.findall(r'channels 0\.\.15 combined.*?(\d+\.?\d*) GB/s', content)
+            # Instruction composition tells what kind of kernel this is:
+            # GEMM = matmul ops (systolic array), Vector = elementwise/norm/etc.
+            comp = re.findall(r'COMP\s+inst_count:\s*\d+\s*\(GEMM:\s*(\d+),\s*Vector:\s*(\d+)\)', content)
 
             logger.info("[METRICS] ===== %s =====", os.path.basename(str(result_path)))
+            if comp:
+                gemm, vector = comp[-1]
+                kind = "matmul" if int(gemm) > 0 and int(vector) == 0 else \
+                       "vector" if int(gemm) == 0 and int(vector) > 0 else \
+                       "mixed"  if int(gemm) > 0 else "data-move"
+                logger.info("[METRICS] op: GEMM %s, Vector %s (%s kernel)", gemm, vector, kind)
             if cyc:
                 logger.info("[METRICS] Total execution cycles: %s", cyc[-1])
             if arr:
