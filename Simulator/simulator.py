@@ -676,7 +676,39 @@ class TOGSimulator():
             import logging as _logging
             model_path_log = f' of "{model_path}" ' if logger.isEnabledFor(_logging.DEBUG) else " "
             logger.info(f'[TOGSim] Simulation log{model_path_log}is stored to "{result_path}"')
+            # Print a per-kernel performance summary so that ANY test running through
+            # the simulator (matmul, llama, resnet, ...) automatically shows metrics,
+            # without each test file having to parse the log itself.
+            TOGSimulator._print_metrics_summary(result.decode(), result_path)
         return result_path
+
+    @staticmethod
+    def _print_metrics_summary(content, result_path):
+        """Parse and log Cycles / per-array Systolic util / DRAM BW from a TOGSim log.
+
+        Called automatically after every standalone simulation so metrics appear
+        for any test, not just test_matmul.
+        """
+        try:
+            cyc = re.findall(r'Total execution cycles:\s*(\d+)', content)
+            arr = re.findall(r'Systolic array \[(\d+)\] utilization\(%\): ([\d.]+)', content)
+            bw = re.findall(r'channels 0\.\.15 combined.*?(\d+\.?\d*) GB/s', content)
+
+            logger.info("[METRICS] ===== %s =====", os.path.basename(str(result_path)))
+            if cyc:
+                logger.info("[METRICS] Total execution cycles: %s", cyc[-1])
+            if arr:
+                num_arrays = max(int(i) for i, _ in arr) + 1
+                last_set = arr[-num_arrays:]
+                utils = [float(v) for _, v in last_set]
+                for idx, v in last_set:
+                    logger.info("[METRICS] Systolic array [%s] util: %s%%", idx, v)
+                logger.info("[METRICS] Systolic util (avg of %d arrays): %.2f%%",
+                            num_arrays, sum(utils) / len(utils))
+            if bw:
+                logger.info("[METRICS] DRAM BW (16ch combined): %s GB/s", bw[-1])
+        except Exception as e:
+            logger.warning("[METRICS] Failed to summarize metrics: %s", e)
 
     @staticmethod
     def get_result_from_file(result_path):
