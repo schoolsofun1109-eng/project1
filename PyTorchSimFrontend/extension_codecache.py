@@ -9,38 +9,46 @@ from PyTorchSimFrontend import extension_config
 from torch._inductor.codecache import get_hash, write
 from torch._inductor.async_compile import AsyncCompile
 from AsmParser.tog_generator import tog_generator
+from AsmParser.onnx_utility import compute_node
 from PyTorchSimFrontend.mlir.mlir_caller_codegen import MLIRKernelCallerCodeGen
 from Simulator.simulator import FunctionalSimulator, CycleSimulator, TOGSimulator
 
 # Configure logger for extension_codecache module (WARNING level by default)
 logger = extension_config.setup_logger()
 
-def _scale_cycles_for_3d_pe(cycle_list, k_tile, plane_size):
+def _scale_cycles_for_3d_pe(cycle_list, compute_types, k_tile, plane_size):
     """Post-scale gem5-measured 2D systolic cycles into a 3D (Sm x Sn x Sk) PE array model.
 
-    gem5 measures each GEMM tile on the 2D array as roughly
-    (K-reduction streaming + fill/drain overhead). A 3D array of depth Sk
-    parallelizes the K reduction across Sk PEs, so only the reduction part
-    shrinks by ~Sk while fill/drain (~Sm+Sn) is unchanged:
+    A 3D array of depth Sk parallelizes the K reduction across Sk PEs, so only the
+    reduction part of a GEMM tile shrinks by ~Sk while fill/drain (~Sm+Sn) is kept:
 
         frac_reduce = K_t / (K_t + Sm + Sn)
         c_3d        = ceil( c*frac_reduce / Sk + c*(1 - frac_reduce) )
 
-    Sk = 1 => returns cycle_list unchanged (bit-exact 2D behavior, early return).
+    Only GEMM/preload compute nodes (compute_type > 0) are scaled. Vector nodes
+    (compute_type == 0, e.g. softmax / RMSNorm / RoPE) have no K reduction and must
+    be left untouched. Sk = 1 => returns cycle_list unchanged (bit-exact 2D behavior).
     """
     Sk = extension_config.systolic_array_size_k
     if Sk is None or Sk <= 1:
         return cycle_list  # 2D array: identical to before, no scaling
+    if len(cycle_list) != len(compute_types):
+        # Should not happen (one cycle per compute node); stay safe rather than corrupt.
+        logger.warning("[3D-PE] cycle/compute-node count mismatch (%d vs %d); skipping 3D scale",
+                       len(cycle_list), len(compute_types))
+        return cycle_list
     Sm = Sn = plane_size
-    if not k_tile or k_tile <= 0:
-        # K tile dim unknown -> conservative whole-cycle scale (still ->identity at Sk=1)
-        return [max(1, math.ceil(c / Sk)) for c in cycle_list]
-    frac = k_tile / (k_tile + Sm + Sn)
+    frac = k_tile / (k_tile + Sm + Sn) if (k_tile and k_tile > 0) else None
     scaled = []
-    for c in cycle_list:
-        scaled.append(int(math.ceil(c * frac / Sk + c * (1.0 - frac))))
-    logger.info("[3D-PE] Sk=%d, K_t=%d, plane=%d, frac_reduce=%.3f: cycles %s -> %s",
-                Sk, k_tile, plane_size, frac, cycle_list, scaled)
+    for c, ctype in zip(cycle_list, compute_types):
+        if ctype is None or ctype <= 0:
+            scaled.append(c)                        # vector node: no K reduction, keep as-is
+        elif frac is None:
+            scaled.append(max(1, math.ceil(c / Sk)))  # K tile unknown: conservative
+        else:
+            scaled.append(int(math.ceil(c * frac / Sk + c * (1.0 - frac))))
+    logger.info("[3D-PE] Sk=%d, K_t=%s, plane=%d: cycles %s -> %s (GEMM nodes only)",
+                Sk, k_tile, plane_size, cycle_list, scaled)
     return scaled
 
 LOCK_TIMEOUT = 600
@@ -271,11 +279,10 @@ class MLIRCodeCache:
             cyclesim = CycleSimulator()
             cycle_list = cyclesim.compile_and_simulate(os.path.join(write_path, cycle_binary_name), vectorlane_size, silent_mode=silent_mode)
 
-            # 3D PE array: parallelize the K-reduction axis (Sk) on top of the
-            # gem5-measured 2D cycles. Sk=1 leaves cycle_list untouched.
-            # loop_size = [TOG_latency, TILE_N, TILE_K] -> K tile = loop_size[-1].
+            # 3D PE array: K tile length for the depth-Sk scaling. The scaling itself
+            # is applied below, AFTER the TOG is loaded, so it can see compute-node
+            # types and skip vector nodes. loop_size = [TOG_latency, TILE_N, TILE_K].
             k_tile = kwargs['loop_size'][-1] if kwargs.get('loop_size') else None
-            cycle_list = _scale_cycles_for_3d_pe(cycle_list, k_tile, vectorlane_size)
 
             # Create TOG
             w_offset, x_offset = vectorlane_size, vectorlane_size
@@ -286,6 +293,13 @@ class MLIRCodeCache:
             w_offset = 0 # max(w_offset - x_offset, 0)
             tile_graph_generator = tog_generator(origins)
             tile_graph_generator.load_file(raw_tog_path)
+            # Now that compute-node types are known, apply the 3D (Sk) scaling to GEMM
+            # nodes only (compute_type > 0), leaving vector nodes untouched. The node
+            # order here matches the cycle_list pop order in generate_tile_graph.
+            compute_types = [n.torchsim_compute_type
+                             for n in tile_graph_generator.node_dict.values()
+                             if isinstance(n, compute_node)]
+            cycle_list = _scale_cycles_for_3d_pe(cycle_list, compute_types, k_tile, vectorlane_size)
             tile_graph_generator.generate_tile_graph(
                 tog_path,
                 cycle_list=cycle_list,
