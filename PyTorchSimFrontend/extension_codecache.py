@@ -17,40 +17,47 @@ from Simulator.simulator import FunctionalSimulator, CycleSimulator, TOGSimulato
 logger = extension_config.setup_logger()
 
 def _scale_cycles_for_3d_pe(cycle_list, compute_types, k_tile, plane_size):
-    """Post-scale gem5-measured 2D systolic cycles into a 3D (Sm x Sn x Sk) PE array model.
+    """Post-correct gem5-measured cycles for a rectangular/3D (Sm x Sn x Sk) PE array.
 
-    K reduction is done in PASSES: a 2D array of height Sm reduces Sm of the K
-    dimension per pass, so it needs ceil(K/Sm) passes. A 3D array of depth Sk
-    reduces Sm*Sk of K per pass -> ceil(K/(Sm*Sk)) passes. The gem5-measured
-    per-tile cycle is K-independent (it is the M-streaming + fill/drain of one
-    tile; verified empirically), so the 3D speedup is purely the reduced pass
-    count applied to each GEMM tile's cycle:
+    gem5 always measures a SQUARE array of side Sn = plane_size (= vpu_num_lanes),
+    with the MLIR tiling matched to that same square. For that square measurement
+    the K reduction takes ceil(K/Sn) passes. A target array of height Sm and depth
+    Sk reduces Sm*Sk of K per pass -> ceil(K/(Sm*Sk)) passes. Since the per-tile
+    cycle is K-independent (M-streaming + fill/drain; verified empirically) and the
+    WIDTH already equals Sn (so N-tiling and width fill/drain are measured exactly),
+    only the K-pass count needs correcting:
 
-        ratio = ceil(K/(Sm*Sk)) / ceil(K/Sm)
+        ratio = ceil(K/(Sm*Sk)) / ceil(K/Sn)
         c_3d  = round(c * ratio)
 
-    Consequences:
-      * K <= Sm (single pass): ratio = 1/1 = 1 -> no speedup (nothing to
-        parallelize), which is physically correct.
-      * K >> Sm: ratio -> 1/Sk (full depth speedup).
+    Cases:
+      * Sm == Sn and Sk == 1 (square 2D): ratio = 1 -> bit-exact, no change.
+      * Sm == Sn, Sk > 1 (n x n x k depth): ratio = ceil(K/(Sn*Sk))/ceil(K/Sn).
+      * Sm != Sn (rectangular height): ratio = ceil(K/(Sm*Sk))/ceil(K/Sn).
+      * K <= Sm*Sk (single pass): ratio = 1 -> no speedup (nothing to parallelize).
 
-    Only GEMM/preload nodes (compute_type > 0) are scaled; vector nodes
-    (compute_type == 0, e.g. softmax / RMSNorm / RoPE) have no K reduction and are
-    left untouched. Sk = 1 => returns cycle_list unchanged (bit-exact 2D behavior).
+    Only GEMM/preload nodes (compute_type > 0) are corrected; vector nodes
+    (compute_type == 0, e.g. softmax / RMSNorm / RoPE) have no K reduction.
+
+    Note (approximation): the K-direction fill/drain uses the measured Sn rather
+    than the target Sm, and M-tiling is left at the measured square. These are
+    second-order vs. the K-pass count. Faithful rectangular tiling would need the
+    (prebuilt, source-unavailable) MLIR pass + gem5 rebuild.
     """
-    Sk = extension_config.systolic_array_size_k
-    if Sk is None or Sk <= 1:
-        return cycle_list  # 2D array: identical to before, no scaling
+    Sk = extension_config.systolic_array_size_k or 1
+    Sn = plane_size                                        # measured square side (= width)
+    Sm = extension_config.systolic_array_height or Sn      # target height (default: square)
+    if Sk <= 1 and Sm == Sn:
+        return cycle_list  # square 2D array: identical to before, no correction
     if len(cycle_list) != len(compute_types):
         # Should not happen (one cycle per compute node); stay safe rather than corrupt.
-        logger.warning("[3D-PE] cycle/compute-node count mismatch (%d vs %d); skipping 3D scale",
+        logger.warning("[3D-PE] cycle/compute-node count mismatch (%d vs %d); skipping correction",
                        len(cycle_list), len(compute_types))
         return cycle_list
-    Sm = plane_size  # array height mapped to the K-reduction axis
     if k_tile and k_tile > 0:
-        passes_2d = math.ceil(k_tile / Sm)
-        passes_3d = math.ceil(k_tile / (Sm * Sk))
-        ratio = passes_3d / passes_2d  # <= 1; == 1 for a single K-pass
+        passes_measured = math.ceil(k_tile / Sn)           # gem5 square (height = Sn)
+        passes_target = math.ceil(k_tile / (Sm * Sk))      # target height Sm + depth Sk
+        ratio = passes_target / passes_measured
     else:
         ratio = None
     scaled = []
@@ -60,9 +67,9 @@ def _scale_cycles_for_3d_pe(cycle_list, compute_types, k_tile, plane_size):
         elif ratio is None:
             scaled.append(max(1, math.ceil(c / Sk)))  # K tile unknown: conservative
         else:
-            scaled.append(max(1, round(c * ratio)))   # GEMM: reduced K-pass count
-    logger.info("[3D-PE] Sk=%d, K_t=%s, plane=%d, pass_ratio=%s: cycles %s -> %s (GEMM only)",
-                Sk, k_tile, plane_size,
+            scaled.append(max(1, round(c * ratio)))   # GEMM: corrected K-pass count
+    logger.info("[3D-PE] Sm=%d, Sn=%d, Sk=%d, K_t=%s, pass_ratio=%s: cycles %s -> %s (GEMM only)",
+                Sm, Sn, Sk, k_tile,
                 None if ratio is None else round(ratio, 3), cycle_list, scaled)
     return scaled
 

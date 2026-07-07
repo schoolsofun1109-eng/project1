@@ -109,6 +109,13 @@ def __getattr__(name):
     if name == "systolic_array_size_k":
         return config_yaml.get("systolic_array_size_k", 1)
 
+    # 3D PE array: array HEIGHT Sm (the K-reduction dimension). gem5 always
+    # measures a SQUARE array of side vpu_num_lanes (= the width Sn), so a
+    # rectangular height Sm != Sn is modeled by post-correcting only the
+    # K-pass count. Defaults to vpu_num_lanes (square, no correction).
+    if name == "systolic_array_height":
+        return config_yaml.get("systolic_array_height", config_yaml["vpu_num_lanes"])
+
     # Mapping strategy
     if name == "codegen_mapping_strategy":
         codegen_mapping_strategy = config_yaml["codegen_mapping_strategy"]
