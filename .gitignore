@@ -1,0 +1,4 @@
+.claude/worktrees/
+.claude/scheduled_tasks.lock
+__pycache__/
+*.pyc

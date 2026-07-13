@@ -1,0 +1,459 @@
+================================================================================
+COMPREHENSIVE RECTANGULAR MATMUL TEST SUITE
+================================================================================
+Test Config: /workspace/PyTorchSim/configs/systolic_ws_128x128_c1_imem_wmem_omem_64kb.yml
+Docker Image: ghcr.io/psal-postech/torchsim-ci:v1.1.0
+
+Test Matrix:
+  1-5: Previously FAILING (now expect PASS)
+  6-10: Previously PASSING (regression check)
+
+================================================================================
+
+================================================================================
+[TEST 1/10] 128x256x256 (128×256×256)
+================================================================================
+[PRIORITY FIX] Previously failing
+
+✗ FAILED
+
+================================================================================
+[TEST 2/10] 256x512x256 (256×512×256)
+================================================================================
+[PRIORITY FIX] Previously failing
+
+✗ FAILED
+
+================================================================================
+[TEST 3/10] 512x256x256 (512×256×256)
+================================================================================
+[PRIORITY FIX] Previously failing
+
+✗ FAILED
+
+================================================================================
+[TEST 4/10] 128x128x1 (128×128×1)
+================================================================================
+[PRIORITY FIX] Previously failing
+
+✗ FAILED
+
+================================================================================
+[TEST 5/10] 3x256x128 (3×256×128)
+================================================================================
+[PRIORITY FIX] Previously failing
+
+✗ FAILED
+
+================================================================================
+[TEST 6/10] 64x128x64 (64×128×64)
+================================================================================
+[REGRESSION CHECK] Previously passing
+
+✗ FAILED
+
+================================================================================
+[TEST 7/10] 64x256x128 (64×256×128)
+================================================================================
+[REGRESSION CHECK] Previously passing
+
+✗ FAILED
+
+================================================================================
+[TEST 8/10] 256x128x64 (256×128×64)
+================================================================================
+[REGRESSION CHECK] Previously passing
+
+✗ FAILED
+
+================================================================================
+[TEST 9/10] 256x64x128 (256×64×128)
+================================================================================
+[REGRESSION CHECK] Previously passing
+
+✗ FAILED
+
+================================================================================
+[TEST 10/10] 1x128x128 (1×128×128)
+================================================================================
+[REGRESSION CHECK] Previously passing
+
+✗ FAILED
+
+================================================================================
+COMPREHENSIVE TEST RESULTS SUMMARY
+================================================================================
+
+Pass/Fail Count: 0/10 PASS
+Failed Tests: 10
+
+Test | Case            | M    | N    | K    | Status | Category
+-----|-----------------|------|------|------|--------|------------
+   1 | 128x256x256     |  128 |  256 |  256 |   FAIL | Priority
+   2 | 256x512x256     |  256 |  512 |  256 |   FAIL | Priority
+   3 | 512x256x256     |  512 |  256 |  256 |   FAIL | Priority
+   4 | 128x128x1       |  128 |  128 |    1 |   FAIL | Priority
+   5 | 3x256x128       |    3 |  256 |  128 |   FAIL | Priority
+   6 | 64x128x64       |   64 |  128 |   64 |   FAIL | Regression
+   7 | 64x256x128      |   64 |  256 |  128 |   FAIL | Regression
+   8 | 256x128x64      |  256 |  128 |   64 |   FAIL | Regression
+   9 | 256x64x128      |  256 |   64 |  128 |   FAIL | Regression
+  10 | 1x128x128       |    1 |  128 |  128 |   FAIL | Regression
+
+================================================================================
+PASS RATE: 0/10 (0%)
+================================================================================
+
+❌ INCOMPLETE: 10 test(s) still failing
+
+Failed test details:
+
+--- Test 1: 128x256x256 ---
+
+==========
+== CUDA ==
+==========
+
+CUDA Version 12.6.3
+
+Container image Copyright (c) 2016-2023, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+
+This container image and its contents are governed by the NVIDIA Deep Learning Container License.
+By pulling and using the container, you accept the terms and conditions of this license:
+https://developer.nvidia.com/ngc/nvidia-deep-learning-container-license
+
+A copy of this license is made available in this container at /NGC-DL-CONTAINER-LICENSE for your convenience.
+
+WARNING: The NVIDIA Driver was not detected.  GPU functionality will not be available.
+   Use the NVIDIA Container Toolkit to start this container with GPU support; see
+   https://docs.nvidia.com/datacenter/cloud-native/ .
+
+[STARTUP] Attempting to register NPU device...
+[STARTUP] Trying import path: PyTorchSimDevice.torch_openreg
+[STARTUP] ✗ Could not register npu via PyTorchSimDevice.torch_openreg: The runtime module of 'npu' has already been registered with '<module 'torch_openreg.openreg' from '/workspace/PyTorchSim/PyTorchSimDevice/torch_openreg/openreg/__init__.py'>'
+[STARTUP] ✗ NPU device NOT registered - tests will run on CPU
+
+[DEBUG] test_matmul(128x256x256) START
+
+[TEST_RESULT] FAILED: not enough values to unpack (expected 3, got 2)
+Traceback (most recent call last):
+  File "<string>", line 10, in <module>
+  File "/workspace/PyTorchSim/tests/test_matmul.py", line 356, in test_matmul
+    opt_fn, stdout_content, log_file = compile_with_stdout_capture(custom_matmul)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ValueError: not enough values to unpack (expected 3, got 2)
+
+--- Test 2: 256x512x256 ---
+
+==========
+== CUDA ==
+==========
+
+CUDA Version 12.6.3
+
+Container image Copyright (c) 2016-2023, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+
+This container image and its contents are governed by the NVIDIA Deep Learning Container License.
+By pulling and using the container, you accept the terms and conditions of this license:
+https://developer.nvidia.com/ngc/nvidia-deep-learning-container-license
+
+A copy of this license is made available in this container at /NGC-DL-CONTAINER-LICENSE for your convenience.
+
+WARNING: The NVIDIA Driver was not detected.  GPU functionality will not be available.
+   Use the NVIDIA Container Toolkit to start this container with GPU support; see
+   https://docs.nvidia.com/datacenter/cloud-native/ .
+
+[STARTUP] Attempting to register NPU device...
+[STARTUP] Trying import path: PyTorchSimDevice.torch_openreg
+[STARTUP] ✗ Could not register npu via PyTorchSimDevice.torch_openreg: The runtime module of 'npu' has already been registered with '<module 'torch_openreg.openreg' from '/workspace/PyTorchSim/PyTorchSimDevice/torch_openreg/openreg/__init__.py'>'
+[STARTUP] ✗ NPU device NOT registered - tests will run on CPU
+
+[DEBUG] test_matmul(256x512x256) START
+
+[TEST_RESULT] FAILED: not enough values to unpack (expected 3, got 2)
+Traceback (most recent call last):
+  File "<string>", line 10, in <module>
+  File "/workspace/PyTorchSim/tests/test_matmul.py", line 356, in test_matmul
+    opt_fn, stdout_content, log_file = compile_with_stdout_capture(custom_matmul)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ValueError: not enough values to unpack (expected 3, got 2)
+
+--- Test 3: 512x256x256 ---
+
+==========
+== CUDA ==
+==========
+
+CUDA Version 12.6.3
+
+Container image Copyright (c) 2016-2023, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+
+This container image and its contents are governed by the NVIDIA Deep Learning Container License.
+By pulling and using the container, you accept the terms and conditions of this license:
+https://developer.nvidia.com/ngc/nvidia-deep-learning-container-license
+
+A copy of this license is made available in this container at /NGC-DL-CONTAINER-LICENSE for your convenience.
+
+WARNING: The NVIDIA Driver was not detected.  GPU functionality will not be available.
+   Use the NVIDIA Container Toolkit to start this container with GPU support; see
+   https://docs.nvidia.com/datacenter/cloud-native/ .
+
+[STARTUP] Attempting to register NPU device...
+[STARTUP] Trying import path: PyTorchSimDevice.torch_openreg
+[STARTUP] ✗ Could not register npu via PyTorchSimDevice.torch_openreg: The runtime module of 'npu' has already been registered with '<module 'torch_openreg.openreg' from '/workspace/PyTorchSim/PyTorchSimDevice/torch_openreg/openreg/__init__.py'>'
+[STARTUP] ✗ NPU device NOT registered - tests will run on CPU
+
+[DEBUG] test_matmul(512x256x256) START
+
+[TEST_RESULT] FAILED: not enough values to unpack (expected 3, got 2)
+Traceback (most recent call last):
+  File "<string>", line 10, in <module>
+  File "/workspace/PyTorchSim/tests/test_matmul.py", line 356, in test_matmul
+    opt_fn, stdout_content, log_file = compile_with_stdout_capture(custom_matmul)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ValueError: not enough values to unpack (expected 3, got 2)
+
+--- Test 4: 128x128x1 ---
+
+==========
+== CUDA ==
+==========
+
+CUDA Version 12.6.3
+
+Container image Copyright (c) 2016-2023, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+
+This container image and its contents are governed by the NVIDIA Deep Learning Container License.
+By pulling and using the container, you accept the terms and conditions of this license:
+https://developer.nvidia.com/ngc/nvidia-deep-learning-container-license
+
+A copy of this license is made available in this container at /NGC-DL-CONTAINER-LICENSE for your convenience.
+
+WARNING: The NVIDIA Driver was not detected.  GPU functionality will not be available.
+   Use the NVIDIA Container Toolkit to start this container with GPU support; see
+   https://docs.nvidia.com/datacenter/cloud-native/ .
+
+[STARTUP] Attempting to register NPU device...
+[STARTUP] Trying import path: PyTorchSimDevice.torch_openreg
+[STARTUP] ✗ Could not register npu via PyTorchSimDevice.torch_openreg: The runtime module of 'npu' has already been registered with '<module 'torch_openreg.openreg' from '/workspace/PyTorchSim/PyTorchSimDevice/torch_openreg/openreg/__init__.py'>'
+[STARTUP] ✗ NPU device NOT registered - tests will run on CPU
+
+[DEBUG] test_matmul(128x128x1) START
+
+[TEST_RESULT] FAILED: not enough values to unpack (expected 3, got 2)
+Traceback (most recent call last):
+  File "<string>", line 10, in <module>
+  File "/workspace/PyTorchSim/tests/test_matmul.py", line 356, in test_matmul
+    opt_fn, stdout_content, log_file = compile_with_stdout_capture(custom_matmul)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ValueError: not enough values to unpack (expected 3, got 2)
+
+--- Test 5: 3x256x128 ---
+
+==========
+== CUDA ==
+==========
+
+CUDA Version 12.6.3
+
+Container image Copyright (c) 2016-2023, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+
+This container image and its contents are governed by the NVIDIA Deep Learning Container License.
+By pulling and using the container, you accept the terms and conditions of this license:
+https://developer.nvidia.com/ngc/nvidia-deep-learning-container-license
+
+A copy of this license is made available in this container at /NGC-DL-CONTAINER-LICENSE for your convenience.
+
+WARNING: The NVIDIA Driver was not detected.  GPU functionality will not be available.
+   Use the NVIDIA Container Toolkit to start this container with GPU support; see
+   https://docs.nvidia.com/datacenter/cloud-native/ .
+
+[STARTUP] Attempting to register NPU device...
+[STARTUP] Trying import path: PyTorchSimDevice.torch_openreg
+[STARTUP] ✗ Could not register npu via PyTorchSimDevice.torch_openreg: The runtime module of 'npu' has already been registered with '<module 'torch_openreg.openreg' from '/workspace/PyTorchSim/PyTorchSimDevice/torch_openreg/openreg/__init__.py'>'
+[STARTUP] ✗ NPU device NOT registered - tests will run on CPU
+
+[DEBUG] test_matmul(3x256x128) START
+
+[TEST_RESULT] FAILED: not enough values to unpack (expected 3, got 2)
+Traceback (most recent call last):
+  File "<string>", line 10, in <module>
+  File "/workspace/PyTorchSim/tests/test_matmul.py", line 356, in test_matmul
+    opt_fn, stdout_content, log_file = compile_with_stdout_capture(custom_matmul)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ValueError: not enough values to unpack (expected 3, got 2)
+
+--- Test 6: 64x128x64 ---
+
+==========
+== CUDA ==
+==========
+
+CUDA Version 12.6.3
+
+Container image Copyright (c) 2016-2023, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+
+This container image and its contents are governed by the NVIDIA Deep Learning Container License.
+By pulling and using the container, you accept the terms and conditions of this license:
+https://developer.nvidia.com/ngc/nvidia-deep-learning-container-license
+
+A copy of this license is made available in this container at /NGC-DL-CONTAINER-LICENSE for your convenience.
+
+WARNING: The NVIDIA Driver was not detected.  GPU functionality will not be available.
+   Use the NVIDIA Container Toolkit to start this container with GPU support; see
+   https://docs.nvidia.com/datacenter/cloud-native/ .
+
+[STARTUP] Attempting to register NPU device...
+[STARTUP] Trying import path: PyTorchSimDevice.torch_openreg
+[STARTUP] ✗ Could not register npu via PyTorchSimDevice.torch_openreg: The runtime module of 'npu' has already been registered with '<module 'torch_openreg.openreg' from '/workspace/PyTorchSim/PyTorchSimDevice/torch_openreg/openreg/__init__.py'>'
+[STARTUP] ✗ NPU device NOT registered - tests will run on CPU
+
+[DEBUG] test_matmul(64x128x64) START
+
+[TEST_RESULT] FAILED: not enough values to unpack (expected 3, got 2)
+Traceback (most recent call last):
+  File "<string>", line 10, in <module>
+  File "/workspace/PyTorchSim/tests/test_matmul.py", line 356, in test_matmul
+    opt_fn, stdout_content, log_file = compile_with_stdout_capture(custom_matmul)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ValueError: not enough values to unpack (expected 3, got 2)
+
+--- Test 7: 64x256x128 ---
+
+==========
+== CUDA ==
+==========
+
+CUDA Version 12.6.3
+
+Container image Copyright (c) 2016-2023, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+
+This container image and its contents are governed by the NVIDIA Deep Learning Container License.
+By pulling and using the container, you accept the terms and conditions of this license:
+https://developer.nvidia.com/ngc/nvidia-deep-learning-container-license
+
+A copy of this license is made available in this container at /NGC-DL-CONTAINER-LICENSE for your convenience.
+
+WARNING: The NVIDIA Driver was not detected.  GPU functionality will not be available.
+   Use the NVIDIA Container Toolkit to start this container with GPU support; see
+   https://docs.nvidia.com/datacenter/cloud-native/ .
+
+[STARTUP] Attempting to register NPU device...
+[STARTUP] Trying import path: PyTorchSimDevice.torch_openreg
+[STARTUP] ✗ Could not register npu via PyTorchSimDevice.torch_openreg: The runtime module of 'npu' has already been registered with '<module 'torch_openreg.openreg' from '/workspace/PyTorchSim/PyTorchSimDevice/torch_openreg/openreg/__init__.py'>'
+[STARTUP] ✗ NPU device NOT registered - tests will run on CPU
+
+[DEBUG] test_matmul(64x256x128) START
+
+[TEST_RESULT] FAILED: not enough values to unpack (expected 3, got 2)
+Traceback (most recent call last):
+  File "<string>", line 10, in <module>
+  File "/workspace/PyTorchSim/tests/test_matmul.py", line 356, in test_matmul
+    opt_fn, stdout_content, log_file = compile_with_stdout_capture(custom_matmul)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ValueError: not enough values to unpack (expected 3, got 2)
+
+--- Test 8: 256x128x64 ---
+
+==========
+== CUDA ==
+==========
+
+CUDA Version 12.6.3
+
+Container image Copyright (c) 2016-2023, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+
+This container image and its contents are governed by the NVIDIA Deep Learning Container License.
+By pulling and using the container, you accept the terms and conditions of this license:
+https://developer.nvidia.com/ngc/nvidia-deep-learning-container-license
+
+A copy of this license is made available in this container at /NGC-DL-CONTAINER-LICENSE for your convenience.
+
+WARNING: The NVIDIA Driver was not detected.  GPU functionality will not be available.
+   Use the NVIDIA Container Toolkit to start this container with GPU support; see
+   https://docs.nvidia.com/datacenter/cloud-native/ .
+
+[STARTUP] Attempting to register NPU device...
+[STARTUP] Trying import path: PyTorchSimDevice.torch_openreg
+[STARTUP] ✗ Could not register npu via PyTorchSimDevice.torch_openreg: The runtime module of 'npu' has already been registered with '<module 'torch_openreg.openreg' from '/workspace/PyTorchSim/PyTorchSimDevice/torch_openreg/openreg/__init__.py'>'
+[STARTUP] ✗ NPU device NOT registered - tests will run on CPU
+
+[DEBUG] test_matmul(256x128x64) START
+
+[TEST_RESULT] FAILED: not enough values to unpack (expected 3, got 2)
+Traceback (most recent call last):
+  File "<string>", line 10, in <module>
+  File "/workspace/PyTorchSim/tests/test_matmul.py", line 356, in test_matmul
+    opt_fn, stdout_content, log_file = compile_with_stdout_capture(custom_matmul)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ValueError: not enough values to unpack (expected 3, got 2)
+
+--- Test 9: 256x64x128 ---
+
+==========
+== CUDA ==
+==========
+
+CUDA Version 12.6.3
+
+Container image Copyright (c) 2016-2023, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+
+This container image and its contents are governed by the NVIDIA Deep Learning Container License.
+By pulling and using the container, you accept the terms and conditions of this license:
+https://developer.nvidia.com/ngc/nvidia-deep-learning-container-license
+
+A copy of this license is made available in this container at /NGC-DL-CONTAINER-LICENSE for your convenience.
+
+WARNING: The NVIDIA Driver was not detected.  GPU functionality will not be available.
+   Use the NVIDIA Container Toolkit to start this container with GPU support; see
+   https://docs.nvidia.com/datacenter/cloud-native/ .
+
+[STARTUP] Attempting to register NPU device...
+[STARTUP] Trying import path: PyTorchSimDevice.torch_openreg
+[STARTUP] ✗ Could not register npu via PyTorchSimDevice.torch_openreg: The runtime module of 'npu' has already been registered with '<module 'torch_openreg.openreg' from '/workspace/PyTorchSim/PyTorchSimDevice/torch_openreg/openreg/__init__.py'>'
+[STARTUP] ✗ NPU device NOT registered - tests will run on CPU
+
+[DEBUG] test_matmul(256x64x128) START
+
+[TEST_RESULT] FAILED: not enough values to unpack (expected 3, got 2)
+Traceback (most recent call last):
+  File "<string>", line 10, in <module>
+  File "/workspace/PyTorchSim/tests/test_matmul.py", line 356, in test_matmul
+    opt_fn, stdout_content, log_file = compile_with_stdout_capture(custom_matmul)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ValueError: not enough values to unpack (expected 3, got 2)
+
+--- Test 10: 1x128x128 ---
+
+==========
+== CUDA ==
+==========
+
+CUDA Version 12.6.3
+
+Container image Copyright (c) 2016-2023, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+
+This container image and its contents are governed by the NVIDIA Deep Learning Container License.
+By pulling and using the container, you accept the terms and conditions of this license:
+https://developer.nvidia.com/ngc/nvidia-deep-learning-container-license
+
+A copy of this license is made available in this container at /NGC-DL-CONTAINER-LICENSE for your convenience.
+
+WARNING: The NVIDIA Driver was not detected.  GPU functionality will not be available.
+   Use the NVIDIA Container Toolkit to start this container with GPU support; see
+   https://docs.nvidia.com/datacenter/cloud-native/ .
+
+[STARTUP] Attempting to register NPU device...
+[STARTUP] Trying import path: PyTorchSimDevice.torch_openreg
+[STARTUP] ✗ Could not register npu via PyTorchSimDevice.torch_openreg: The runtime module of 'npu' has already been registered with '<module 'torch_openreg.openreg' from '/workspace/PyTorchSim/PyTorchSimDevice/torch_openreg/openreg/__init__.py'>'
+[STARTUP] ✗ NPU device NOT registered - tests will run on CPU
+
+[DEBUG] test_matmul(1x128x128) START
+
+[TEST_RESULT] FAILED: not enough values to unpack (expected 3, got 2)
+Traceback (most recent call last):
+  File "<string>", line 10, in <module>
+  File "/workspace/PyTorchSim/tests/test_matmul.py", line 356, in test_matmul
+    opt_fn, stdout_content, log_file = compile_with_stdout_capture(custom_matmul)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ValueError: not enough values to unpack (expected 3, got 2)

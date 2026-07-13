@@ -1,0 +1,224 @@
+================================================================================
+RECTANGULAR MATMUL VALIDATION TEST - COMPLETE RESULTS INDEX
+================================================================================
+
+VALIDATION EXECUTED: 2026-07-03
+COMMIT TESTED: 66d0acd "Fix: Include counter in SRAM buffer names for N-split iteration separation"
+
+This directory contains the complete validation results for the SRAM buffer
+collision fix applied to rectangular matmul support (M≠N case).
+
+================================================================================
+MAIN RESULT FILES
+================================================================================
+
+1. RECTANGULAR_MATMUL_TEST_RESULTS.csv
+   Format: CSV with 10 rows (one per test)
+   Contains: Test#, Name, Function, M, N, K, Status, MaxDiff, Notes
+   Purpose: Quick reference of all test results
+   Read this for: Summary of all 10 test outcomes
+
+2. FINAL_VALIDATION_SUMMARY.txt
+   Format: Plain text, structured
+   Contains: Executive summary, test results, findings, next steps
+   Purpose: High-level overview of validation and conclusions
+   Read this for: Quick understanding of validation outcome
+
+3. RECTANGULAR_MATMUL_VALIDATION_REPORT.txt
+   Format: Plain text, detailed technical analysis
+   Contains: Detailed test results with error patterns and analysis
+   Purpose: In-depth technical evaluation of fix completeness
+   Read this for: Technical details about each failing test
+
+4. ROOT_CAUSE_ASSESSMENT.txt
+   Format: Plain text, analytical breakdown
+   Contains: Pattern analysis of errors, root cause assessment
+   Purpose: Understanding what's still broken beyond buffer naming
+   Read this for: Why the fix was incomplete
+
+================================================================================
+TEST BREAKDOWN
+================================================================================
+
+TOTAL TESTS RUN: 10
+- Rectangular matmul tests: 7 (Tests 1-5, 9-10)
+- Control/square matmul tests: 3 (Tests 6-8)
+
+RESULTS:
+- Passed: 3/10 (30%) - All square matrices
+- Failed: 7/10 (70%) - All rectangular matrices
+
+BY TEST:
+--------
+✓ PASSED (Square Matrices - Control Tests):
+  Test 6: 32×32×32 matmul - max_diff = 0.00
+  Test 7: 128×128×128 matmul - max_diff = 0.00
+  Test 8: 256×256×256 matmul - max_diff = 0.00
+
+✗ FAILED (Rectangular Matrices - Bug Present):
+  Test 1: 128×256×256 matmul - max_diff = 78.04 (3914.46 relative)
+  Test 2: 128×63×56 matmul - max_diff = 19.89
+  Test 3: 128×256×512 addmm - max_diff = 69.44 (2398.28 relative)
+  Test 4: 128×256×512 addmm - max_diff = 69.44 (duplicate of Test 3)
+  Test 5: 129×61×56 addmm - max_diff = 20.22 (6.81 relative)
+  Test 9: 129×61×56 addmm2 - max_diff = 20.22
+  Test 10: 516×244×224 addmm - max_diff = 60.61 (4516.09 relative)
+
+================================================================================
+KEY FINDINGS
+================================================================================
+
+1. BUFFER COLLISION FIX (commit 66d0acd)
+   Status: ✓ Applied, ✗ Insufficient
+   
+   The fix changes buffer naming:
+   - OLD: "W_spad" (all N-split iterations use same name)
+   - NEW: "W_0_spad", "W_1_spad", ... (unique per iteration)
+   
+   This prevents buffer NAME aliasing but does NOT fix deeper issues:
+   - N-split iteration coordination is still broken
+   - Output buffer accumulation across iterations fails
+   - Weight tile loading for splits is incomplete
+
+2. ERROR PATTERNS
+   
+   Pattern A (Test 1): "Correct edges, wrong middle"
+   - First/last columns correct, middle columns wrong
+   - Indicates: Weight tiles mismapped in N-split iterations
+   - Only first and last weight tiles loaded correctly
+
+   Pattern B (Tests 2,5,9): "Zero rows"
+   - Last rows contain zeros instead of computed values
+   - Indicates: Output buffer not accumulating across iterations
+   - Partial output from N-split accumulation
+
+   Pattern C (Tests 3,4,10): "Scattered errors"
+   - Errors distributed across output matrix
+   - Indicates: Buffer overwrite or iteration ordering issues
+   - Multiple N-split coordination problems
+
+3. SQUARE MATRIX SUCCESS
+   - All N×N cases pass with 0 error
+   - Proves single-iteration (no N-split) case is correct
+   - Proves bug is SPECIFIC to multi-iteration N-split handling
+   - Proves core systolic array computation is correct
+
+================================================================================
+ROOT CAUSE ANALYSIS
+================================================================================
+
+The rectangular matmul bug has TWO distinct layers:
+
+LAYER 1: BUFFER NAME COLLISION (FIXED)
+✓ Commit 66d0acd correctly ensures unique buffer names
+✓ No more SRAM aliasing between different iterations
+
+LAYER 2: N-SPLIT ITERATION COORDINATION (NOT FIXED)
+✗ OMEM accumulation broken across iterations
+✗ Weight tile addressing broken for N-split
+✗ DMA loop sequencing broken for rectangular tiles
+✗ MLIR variable linking possibly broken between iterations
+
+EVIDENCE:
+- Error patterns are SELECTIVE (some elements right, some wrong)
+- Not uniform garbage (which would indicate buffer collision alone)
+- Buffer naming fix doesn't reduce error magnitudes
+- Square matrices (no N-split) work perfectly
+- Rectangular matrices (N-split required) all fail
+
+CONCLUSION:
+The buffer naming fix was necessary but NOT sufficient.
+Additional architectural fixes required for N-split coordination.
+
+================================================================================
+TECHNICAL ASSESSMENT
+================================================================================
+
+WHAT WORKS:
+✓ Single-iteration GEMM (square matrices)
+✓ Tile descriptor generation
+✓ Systolic array computation
+✓ DRAM stride handling
+✓ Buffer name uniqueness (post-fix)
+
+WHAT'S BROKEN:
+✗ Multi-iteration N-split handling
+✗ Output buffer accumulation across iterations
+✗ Weight tile loading for N-split iterations
+✗ DMA loop coordination for rectangular tiles
+✗ Possible MLIR variable persistence between iterations
+
+IMPACT:
+- Blocks ALL non-square matrix multiplications
+- Severity: HIGH
+- Affects core tensor computation functionality
+
+================================================================================
+FILES FOR FURTHER ANALYSIS
+================================================================================
+
+Test Log Files (generated during execution):
+- /tmp/rectangular_test_results/test_1.log through test_10.log
+- Contains detailed output including Spike simulation traces
+
+Source Files Requiring Investigation:
+1. PyTorchSimFrontend/mlir/mlir_gemm_template.py
+   - OMEM buffer management
+   - Weight tile addressing
+   - Split iteration semantics
+
+2. PyTorchSimFrontend/mlir/mlir_codegen_backend.py
+   - N-split iteration loop generation
+   - MLIR variable linking between iterations
+   - DMA transfer sequencing
+
+3. PyTorchSimFrontend/mlir/mlir_common.py
+   - Tile stride calculations for rectangular tiles
+   - Buffer offset calculations
+
+================================================================================
+NEXT STEPS
+================================================================================
+
+Required Work Beyond commit 66d0acd:
+
+PRIORITY 1 (Must Fix):
+1. Fix OMEM accumulation semantics for N-split iterations
+2. Fix weight tile addressing in rectangular split scenarios
+3. Fix DMA loop sequencing for rectangular tile iterations
+
+PRIORITY 2 (Should Investigate):
+4. Verify MLIR variable linking between iteration loops
+5. Check buffer offset calculations for split tiles
+6. Validate tile descriptor generation for N-split
+
+PRIORITY 3 (Support):
+7. Add detailed N-split iteration tests
+8. Add instrumentation for debugging N-split coordination
+9. Document N-split implementation requirements
+
+================================================================================
+VALIDATION CONCLUSION
+================================================================================
+
+STATUS: ❌ FAILED - Root cause fix INCOMPLETE
+
+The SRAM buffer collision fix (commit 66d0acd) was correctly applied but
+represents only a partial solution. Rectangular matmul continues to fail in
+70% of test cases due to deeper N-split iteration coordination issues.
+
+RESULT SUMMARY:
+- 3/10 tests PASSED (only square matrices)
+- 7/10 tests FAILED (all rectangular matrices)
+- Buffer naming is now correct
+- Iteration coordination remains broken
+
+RECOMMENDATION:
+Treat this as a BLOCKER for non-square tensor operations.
+Additional engineering required to fully resolve rectangular matmul support.
+
+Generated: 2026-07-03
+Commit Tested: 66d0acd
+Test Framework: PyTorchSim with Spike/TOGSim backends
+
+================================================================================

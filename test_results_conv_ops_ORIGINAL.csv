@@ -1,0 +1,30 @@
+test_type,config,result,max_diff,cycles,notes
+conv2d,Conv2D_1x1_simple,PASS,0.0,0.013,All 13 Conv2D configurations passed
+conv2d,Conv2D_7x7_s2,PASS,0.0,0.002,Stride=2 variant
+conv2d,Conv2D_7x7_s1,PASS,0.0,0.001,Stride=1 variant
+conv2d,Conv2D_5x5,PASS,0.0,0.003,5x5 kernel configuration
+conv2d,Conv2D_7x7_512ch,PASS,0.0,0.007,Large channel count
+conv2d,Conv2D_3x3_s2,PASS,0.0,0.002,3x3 kernel stride 2
+conv2d,Conv2D_3x3_s2_small,PASS,0.0,0.001,3x3 small spatial dims
+conv2d,Conv2D_1x1_tiny,PASS,0.0,0.000,1x1 minimal spatial
+conv2d,Conv2D_1x1_s2,PASS,0.0,0.001,1x1 with stride 2
+conv2d,Conv2D_ViT_patch,PASS,0.0,0.004,Vision Transformer patch embedding
+conv2d,Conv2D_1x1_minimal,PASS,0.0,0.000,1x1 minimal configuration
+conv2d,Conv2D_3x3_basic,PASS,0.0,0.002,3x3 basic configuration
+conv2d,Conv2D_5x5_medium,PASS,0.0,0.002,5x5 medium configuration
+pooling,AvgPool_512x7x7,PASS,0.0,0.000,AdaptiveAvgPool 512ch
+pooling,AvgPool_256x14x14,PASS,0.0,0.000,AdaptiveAvgPool 256ch
+pooling,AvgPool_64x28x28,PASS,0.0,0.000,AdaptiveAvgPool 64ch
+softmax,Softmax_64x128_d1,PASS,0.0,0.000,Softmax dim=1
+softmax,Softmax_64x128_d0,PASS,0.0,0.001,Softmax dim=0
+softmax,Softmax_256x128_d1,PASS,0.0,0.000,Large batch softmax
+softmax,Softmax_1x16,PASS,0.0,0.000,Small softmax
+softmax,Softmax_5x8,PASS,0.0,0.000,Tiny softmax
+layernorm,LayerNorm_64x64,PASS,0.0,0.000,LayerNorm 64x64
+layernorm,LayerNorm_512x768,PASS,0.0,0.000,LayerNorm 512x768
+layernorm,LayerNorm_128x256,PASS,0.0,0.000,LayerNorm 128x256
+reduce,ReduceSum_29x47_d1,PASS,0.0,0.000,ReduceSum dim=1 keepdim
+reduce,ReduceSum_17x68_d0,PASS,0.0,0.000,ReduceSum dim=0 keepdim
+reduce,ReduceSum_327x447_d1,PASS,0.0,0.000,ReduceSum large dim=1
+reduce,ReduceSum_327x447_d0,PASS,0.0,0.000,ReduceSum large dim=0
+reduce,ReduceSum_128x768_default,PASS,0.0,0.000,ReduceSum default

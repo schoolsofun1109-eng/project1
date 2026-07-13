@@ -1,0 +1,157 @@
+================================================================================
+FINAL VALIDATION REPORT: RECTANGULAR MATMUL WITH SRAM BUFFER COLLISION FIX
+================================================================================
+
+EXECUTION DATE: 2026-07-03
+COMMIT TESTED: 66d0acd "Fix: Include counter in SRAM buffer names for N-split iteration separation"
+DOCKER IMAGE: ghcr.io/psal-postech/torchsim-ci:v1.1.0
+
+================================================================================
+EXECUTIVE SUMMARY
+================================================================================
+
+RESULT: VALIDATION FAILED - 3/10 tests passed (30% success rate)
+
+The SRAM buffer collision fix (commit 66d0acd) was correctly applied but did NOT
+resolve the rectangular matmul bug. The buffer naming fix (W_0_spad, W_1_spad, etc.)
+was necessary but insufficient. Deeper issues remain in N-split iteration handling.
+
+================================================================================
+DETAILED TEST RESULTS
+================================================================================
+
+RECTANGULAR MATMUL TESTS (Expected to PASS after fix):
+------------------------------------------------------
+
+Test 1: 128×256×256 matmul
+  Status: FAILED
+  Max Diff: 78.04 (was 78 in previous attempt)
+  Pattern: First/last columns correct, middle columns have large errors
+  Root Cause: Classic N-split buffer collision or iteration coordination issue
+  
+Test 2: 128×63×56 matmul
+  Status: FAILED
+  Max Diff: 19.89 
+  Pattern: Last row contains zeros instead of computed values
+  Root Cause: Incomplete output accumulation across N-split iterations
+  
+Test 3: 128×256×512 addmm
+  Status: FAILED
+  Max Diff: 69.44
+  Pattern: Scattered errors throughout output matrix
+  Root Cause: Possible output buffer overwrite or accumulation issue
+  
+Test 4: 128×256×512 addmm (duplicate)
+  Status: FAILED
+  Max Diff: 69.44
+  Note: Identical to Test 3, confirms deterministic failure
+  
+Test 5: 129×61×56 addmm
+  Status: FAILED
+  Max Diff: 20.22
+  Pattern: Last rows contain zeros, incomplete output
+  Root Cause: Output buffer not properly accumulated across iterations
+  
+Test 9: 129×61×56 addmm2
+  Status: FAILED
+  Max Diff: 20.22
+  Pattern: Same as Test 5
+  Root Cause: Same N-split accumulation issue
+  
+Test 10: 516×244×224 addmm
+  Status: FAILED
+  Max Diff: 60.61
+  Pattern: Scattered errors in large matrix
+  Root Cause: N-split buffer management failure
+
+
+SQUARE MATMUL TESTS (Control - should still PASS):
+--------------------------------------------------
+
+Test 6: 32×32×32 matmul
+  Status: PASSED ✓
+  Max Diff: 0.00
+  Note: Confirms single-iteration case still works correctly
+
+Test 7: 128×128×128 matmul
+  Status: PASSED ✓
+  Max Diff: 0.00
+  Note: Confirms single-iteration case still works correctly
+
+Test 8: 256×256×256 matmul
+  Status: PASSED ✓
+  Max Diff: 0.00
+  Note: Confirms single-iteration case still works correctly
+
+
+================================================================================
+ROOT CAUSE ANALYSIS
+================================================================================
+
+The buffer naming fix in commit 66d0acd changes:
+  OLD: all N-split iterations used "W_spad" (collision)
+  NEW: N-split iterations use "W_0_spad", "W_1_spad", etc. (no collision)
+
+HOWEVER, this fix only addresses buffer NAME aliasing, not deeper issues in:
+
+1. N-SPLIT ITERATION COORDINATION
+   - DMA transfer sequencing across N-tile iterations
+   - Proper weight tile loading for each iteration
+   - Correct DRAM addressing for split weight matrices
+
+2. OUTPUT BUFFER ACCUMULATION
+   - Pattern of zeros in last rows suggests output buffer not properly
+     carrying values across N-split iterations
+   - Possible issue with OMEM read-after-write or accumulation semantics
+
+3. WEIGHT MATRIX ADDRESSING
+   - N-split requires loading different weight tiles for each iteration
+   - Test 1 error pattern (first/last cols correct, middle wrong) suggests
+     only first and last weight tiles are correctly loaded
+   - Middle weight tiles may be overwritten or misaddressed
+
+4. TILE ITERATION SEMANTICS
+   - Square matrices work (single N-iteration)
+   - Rectangular matrices fail (multiple N-iterations)
+   - This strongly indicates N-split iteration loop has bugs in either:
+     a) MLIR code generation for nested DMA loops
+     b) Variable linking between iterations
+     c) Buffer offset calculations for split tiles
+
+================================================================================
+WHAT THE FIX ACCOMPLISHED
+================================================================================
+
+✓ Buffer name uniqueness: No more all-buffers-aliased-to-same-SRAM problem
+✓ Prevents some data collisions between different iteration's temporary buffers
+
+What it did NOT accomplish:
+✗ Fix OMEM accumulation across N-split iterations
+✗ Fix weight tile addressing in split scenarios  
+✗ Fix DMA loop coordination for rectangular tiles
+✗ Resolve iteration sequencing issues
+
+================================================================================
+CONCLUSION
+================================================================================
+
+BUFFER COLLISION FIX STATUS: Incomplete root cause fix
+
+The fix was necessary (buffer naming collisions are bad), but it only addresses
+one symptom. The rectangular matmul bug has deeper architectural issues:
+
+- Multi-iteration N-split handling is broken in MLIR code generation
+- Output buffer accumulation across iterations is not working
+- Weight tile addressing in split scenarios needs investigation
+- Possibly needs fundamental changes to how split iterations are coordinated
+
+RECOMMENDATION: 
+Additional investigation and fixes needed in:
+1. mlir_codegen_backend.py - N-split iteration loop generation
+2. mlir_gemm_template.py - Weight/output buffer management across iterations
+3. DMA transfer sequencing for split tiles
+4. Accumulation/reduction semantics for partial tile results
+
+VALIDATION RESULT: ❌ FAILED - 3/10 tests passed (70% failure rate)
+
+================================================================================
