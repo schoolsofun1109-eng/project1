@@ -866,7 +866,8 @@ class MLIRKernel(mlir_common.BaseMLIRKernel):
         c_type = "uint64_t"
         new_name = f"index_expr_{compute_vec_size}"
         if new_name not in self.global_vars_dict:
-            self.header.writeline(f"{c_type} {new_name}_spad[{compute_vec_size*self.vector_lane}] __attribute__ ((section(\".spad\")));")
+            section = self.spad_section(None)
+            self.header.writeline(f"{c_type} {new_name}_spad[{compute_vec_size*self.vector_lane}] __attribute__ ((section(\"{section}\")));")
             self.gem5_header.writeline(f"{c_type} {new_name}_spad[{compute_vec_size}] __attribute__((aligned(64)));")
             self.global_vars.writeline(f"memref.global @{new_name}_spad : {tile_shape}")
             self.global_vars_dict[new_name] = dict()
@@ -1142,13 +1143,9 @@ class MLIRKernel(mlir_common.BaseMLIRKernel):
         spike_write_path = os.path.join(write_path, "global_var.h")
         gem5_write_path = os.path.join(write_path, "gem5_global_var.h")
 
-        spad_end_symbol = "int spad_end[0] __attribute__ ((section(\".spad\")));\n"
-        spad_section_end_symbol = (
-            f"int spad_section_end[0] __attribute__ ((section(\".spad\"), aligned({self.spad_info['spad_size']*self.vector_lane})));"
-        )
         lock = FileLock(extension_codecache.get_lock_path(write_path), timeout=extension_codecache.LOCK_TIMEOUT)
         with lock:
-            write_atomic(spike_write_path, self.header.getvalue() + spad_end_symbol + spad_section_end_symbol)
+            write_atomic(spike_write_path, self.header.getvalue() + self.spad_end_symbols())
             write_atomic(gem5_write_path, self.gem5_header.getvalue())
 
     def get_arg_info(self, name):
@@ -1447,7 +1444,15 @@ class MLIRKernel(mlir_common.BaseMLIRKernel):
             new_name = f"buf{self.spadbuf_counter}_spad" if forced_name is None else f"{forced_name}_spad"
             self.spadbuf_counter+=1
             # Add definition to header
-            self.header.writeline(f"{c_type} {new_name}[{tile_size // self.vector_lane}] __attribute__ ((section(\".spad\")));")
+            # Route by tensor role: W(eight) -> WMEM, Y(output) -> OMEM, else IMEM.
+            # Only forced_name carries a role in the controlled sense (def_sram_buffer
+            # always passes forced_name="X"/"W"/"Y"/etc from the GEMM/conv/bmm/sort
+            # templates). dram_name alone, from the generic Inductor elementwise path
+            # (get_scratchpad_buffer, forced_name=None), is an arbitrary real tensor
+            # name (e.g. "weight" from LlamaRMSNorm) that must NOT be role-matched --
+            # doing so overflowed WMEM for a vector-only kernel (no real W/Y tiles).
+            section = self.spad_section(forced_name)
+            self.header.writeline(f"{c_type} {new_name}[{tile_size // self.vector_lane}] __attribute__ ((section(\"{section}\")));")
             self.gem5_header.writeline(f"{c_type} {new_name}[{tile_size}] __attribute__((aligned(64)));")
             self.global_vars.writeline(f"memref.global @{new_name} : {tile_shape}")
             self.global_vars_dict[dram_name][str(raw_index)] = new_name

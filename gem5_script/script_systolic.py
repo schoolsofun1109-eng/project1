@@ -18,6 +18,11 @@ parser.add_argument("--cpu", choices=["RiscvAtomicSimpleCPU", "RiscvTimingSimple
 parser.add_argument("--mem", choices=["SimpleMemory", "ScratchpadMemory", "DDR3_1600_8x8"], default="ScratchpadMemory")
 parser.add_argument("--sparse", type=bool, default=False)
 parser.add_argument("--vlane", type=int, default=128)
+# Rectangular PE array: array height Sm (the K-reduction dimension). 0 means
+# "square" -> fall back to --vlane (width Sn), reproducing the original behaviour.
+parser.add_argument("--vlane-height", type=int, default=0)
+# 3D PE array: depth Sk (parallel K-reduction layers). 1 = 2D (no depth).
+parser.add_argument("--vlane-depth", type=int, default=1)
 parser.add_argument("--vlen", type=int, default=256)
 args = parser.parse_args()
 
@@ -128,9 +133,17 @@ valid_cpu = {
     "RiscvVPU": RiscvVPU,
 }
 
-# change systolicArrayWidth and systolicArrayHeight into args.vlane
+# change systolicArrayWidth and systolicArrayHeight.
+# Width = Sn (--vlane); Height = Sm (--vlane-height, defaults to Sn for a square
+# array). gem5's SystolicArrayFU already computes the fill/drain latency as
+# saSize = Width + Height - 1, so an independent height gives a real rectangular
+# timing model (no post-hoc approximation needed).
+_vlane_height = args.vlane_height if args.vlane_height and args.vlane_height > 0 else args.vlane
+_vlane_depth = args.vlane_depth if args.vlane_depth and args.vlane_depth > 0 else 1
 SystolicArray.systolicArrayWidth = args.vlane
-SystolicArray.systolicArrayHeight = args.vlane
+SystolicArray.systolicArrayHeight = _vlane_height
+SystolicArray.systolicArrayDepth = _vlane_depth
+print(f"[RECT-PE] SystolicArray Width(Sn)={args.vlane} Height(Sm)={_vlane_height} Depth(Sk)={_vlane_depth}")
 binary = args.cmd
 
 # Main System Setup

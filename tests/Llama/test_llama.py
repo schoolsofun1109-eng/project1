@@ -7,16 +7,18 @@ from transformers.models.llama.configuration_llama import LlamaConfig
 from transformers.models.llama.modeling_llama import LlamaForCausalLM, LlamaDecoderLayer, LlamaRMSNorm, LlamaRotaryEmbedding, LlamaModel
 
 def test_result(name, out, ref, rtol=1e-4, atol=1e-4):
-    if torch.allclose(out.cpu(), ref.cpu(), rtol=rtol, atol=atol):
-        msg = f"|{name} Test Passed|"
-        print("-" * len(msg)); print(msg); print("-" * len(msg))
-    else:
-        msg = f"|{name} Test Failed|"
-        print("-" * len(msg)); print(msg); print("-" * len(msg))
-        diff = (out.cpu().int() - ref.cpu().int()).abs().max().item()
-        print("device out:", out.detach().cpu())
-        print("cpu ref  :", ref.detach().cpu())
-        print(f"Max abs diff: {diff}")
+    passed = torch.allclose(out.cpu(), ref.cpu(), rtol=rtol, atol=atol)
+    msg = f"|{name} Test {'Passed' if passed else 'Failed'}|"
+    print("-" * len(msg)); print(msg); print("-" * len(msg))
+    # Always show both NPU (device) and CPU reference outputs, pass or fail,
+    # so the two can be compared even on a passing run.
+    o = out.detach().cpu().float()
+    r = ref.detach().cpu().float()
+    max_diff = (o - r).abs().max().item()
+    print("device (NPU) out:", o.flatten()[:8], "...")
+    print("cpu ref        :", r.flatten()[:8], "...")
+    print(f"Max abs diff: {max_diff}")
+    if not passed:
         sys.exit(1)
 
 @torch.no_grad()

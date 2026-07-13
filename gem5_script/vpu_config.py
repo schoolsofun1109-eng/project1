@@ -7,6 +7,7 @@ class SystolicArray(MinorFU):
     opLat = 1
     systolicArrayWidth = 128
     systolicArrayHeight = 128
+    systolicArrayDepth = 1
 
 class SparseAccelerator(MinorFU):
     unitType = "SparseAccelerator"

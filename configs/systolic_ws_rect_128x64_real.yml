@@ -1,10 +1,10 @@
-num_cores: 2
+num_cores: 1
 core_freq_mhz: 940
 core_stats_print_period_cycles: 10000
 num_systolic_array_per_core: 1
 
 # ===== PE Array:  M(token) x N(output-ch) x P(input-ch) =====
-pe_M: 128
+pe_M: 64
 pe_N: 128
 pe_P: 1
 
@@ -14,7 +14,7 @@ simd_bit: 256
 
 dram_type: ramulator2
 dram_freq_mhz: 940
-dram_channels: 32
+dram_channels: 16
 dram_stats_print_period_cycles: 10000
 ramulator_config_path: ../configs/ramulator2_configs/HBM2_TPUv3.yaml
 
@@ -22,29 +22,30 @@ icnt_type: simple
 icnt_latency_cycles: 10
 icnt_freq_mhz: 940
 icnt_injection_ports_per_core: 16
-num_partition: 2
-partition:
-  core_0: 0
-  core_1: 1
 
-pytorchsim_functional_mode: 1
-pytorchsim_timing_mode: 1
-
-codegen_mapping_strategy: autotune
-codegen_external_mapping_file: ''
-codegen_autotune_max_retry: 10
-codegen_autotune_template_topk: 4
-codegen_compiler_optimization: all
-
-# --- IMEM/WMEM/OMEM (3-way split SRAM, our NPU format) - 128KB each ---
+# IMEM (Input Memory) - 128KB
 imem_num_banks: 8
 imem_sram_bitwidth: 256
 imem_sram_depth: 512
 
+# WMEM (Weight Memory) - 128KB
 wmem_num_banks: 8
 wmem_sram_bitwidth: 256
 wmem_sram_depth: 512
 
+# OMEM (Output Memory) - 128KB
 omem_num_banks: 8
 omem_sram_bitwidth: 256
 omem_sram_depth: 512
+
+pytorchsim_functional_mode: false
+pytorchsim_timing_mode: true
+
+codegen_mapping_strategy: heuristic
+codegen_autotune_max_retry: 5
+codegen_autotune_template_topk: 5
+
+codegen_compiler_optimization: all
+
+# --- Rectangular PE array (real simulation, not approximation) ---
+systolic_array_real_rect: true

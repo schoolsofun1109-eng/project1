@@ -207,6 +207,17 @@ class CycleSimulator():
         gem5_script_path = os.path.join(extension_config.CONFIG_TORCHSIM_DIR, "gem5_script/script_systolic.py")
         gem5_cmd = [extension_config.CONFIG_GEM5_PATH, "-r", "--stdout-file=sto.log", "-d", dir_path, gem5_script_path, "-c", target_binary, "--vlane", str(vectorlane_size)]
 
+        # Real rectangular / 3D array: tell gem5 the array HEIGHT Sm (--vlane-height,
+        # saSize = Sm+Sn-1) and DEPTH Sk (--vlane-depth, Sk parallel K-reduction
+        # layers). Omitted in the default square-2D mode.
+        if extension_config.systolic_array_real_rect:
+            sm = extension_config.systolic_array_height or vectorlane_size
+            sk = extension_config.systolic_array_size_k or 1
+            if sm != vectorlane_size:
+                gem5_cmd += ["--vlane-height", str(sm)]
+            if sk > 1:
+                gem5_cmd += ["--vlane-depth", str(sk)]
+
         if not silent_mode:
             logger.debug(f"[Gem5] cmd> {' '.join(gem5_cmd)}")
             logger.info("[Gem5] Gem5 simulation started")
@@ -624,9 +635,12 @@ class TOGSimulator():
         """
         try:
             cyc = re.findall(r'Total execution cycles:\s*(\d+)', content)
-            arr = re.findall(r'Systolic array \[(\d+)\] utilization\(%\): ([\d.]+)', content)
+            # Array index restarts at 0 within each core, so it's only unique
+            # per (core, array) pair -- must key on both, not "last N lines".
+            arr = re.findall(r'Core \[(\d+)\] : Systolic array \[(\d+)\] utilization\(%\): ([\d.]+)', content)
             vec = re.findall(r'Vector unit utilization\(%\): ([\d.]+)', content)
-            bw = re.findall(r'channels 0\.\.15 combined.*?(\d+\.?\d*) GB/s', content)
+            # Channel count varies by config (16, 32, ...); don't hardcode it.
+            bw = re.findall(r'channels \d+\.\.\d+ combined.*?(\d+\.?\d*) GB/s', content)
             # Instruction composition tells what kind of kernel this is:
             # GEMM = matmul ops (systolic array), Vector = elementwise/norm/etc.
             comp = re.findall(r'COMP\s+inst_count:\s*\d+\s*\(GEMM:\s*(\d+),\s*Vector:\s*(\d+)\)', content)
@@ -641,17 +655,22 @@ class TOGSimulator():
             if cyc:
                 logger.info("[METRICS] Total execution cycles: %s", cyc[-1])
             if arr:
-                num_arrays = max(int(i) for i, _ in arr) + 1
-                last_set = arr[-num_arrays:]
-                utils = [float(v) for _, v in last_set]
-                for idx, v in last_set:
-                    logger.info("[METRICS] Systolic array [%s] util: %s%%", idx, v)
-                logger.info("[METRICS] Systolic util (avg of %d arrays): %.2f%%",
-                            num_arrays, sum(utils) / len(utils))
+                # Keep only the final report per (core, array); periodic
+                # interval logs earlier in the same run are superseded.
+                last_per_key = {}
+                for core, idx, v in arr:
+                    last_per_key[(core, idx)] = float(v)
+                for (core, idx), v in last_per_key.items():
+                    logger.info("[METRICS] Core[%s] Systolic array [%s] util: %.2f%%", core, idx, v)
+                utils = list(last_per_key.values())
+                num_cores = len({core for core, _ in last_per_key})
+                logger.info("[METRICS] Systolic util (avg of %d arrays across %d core%s): %.2f%%",
+                            len(utils), num_cores, "" if num_cores == 1 else "s",
+                            sum(utils) / len(utils))
             if vec:
                 logger.info("[METRICS] Vector unit util: %s%%", vec[-1])
             if bw:
-                logger.info("[METRICS] DRAM BW (16ch combined): %s GB/s", bw[-1])
+                logger.info("[METRICS] DRAM BW combined: %s GB/s", bw[-1])
         except Exception as e:
             logger.warning("[METRICS] Failed to summarize metrics: %s", e)
 

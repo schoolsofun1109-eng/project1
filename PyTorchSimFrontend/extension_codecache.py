@@ -45,18 +45,34 @@ def _scale_cycles_for_3d_pe(cycle_list, compute_types, k_tile, plane_size):
     (prebuilt, source-unavailable) MLIR pass + gem5 rebuild.
     """
     Sk = extension_config.systolic_array_size_k or 1
-    Sn = plane_size                                        # measured square side (= width)
-    Sm = extension_config.systolic_array_height or Sn      # target height (default: square)
+    Sn = plane_size                                        # gem5 array width
+    Sm = extension_config.systolic_array_height or Sn      # array fill height (one layer)
+    real = extension_config.systolic_array_real_rect
+
+    # Real mode: gem5 + the MLIR passes model the array directly and with no
+    # post-scale. The 3D depth Sk is handled by DECOUPLING the two knobs --
+    # the MLIR K-tiling divisor is Sm*Sk (K reduced per pass) while gem5's fill
+    # height stays Sm (--vlane-height) so saSize = Sm+Sn-1. Both the pass count
+    # and the fill are therefore really simulated, so return the cycles as-is.
+    if real:
+        return cycle_list
+
+    # ---- Legacy post-scale approximation (real mode off) ----
+    # gem5 measured a square Sn x Sn array (K tiled by Sn). The target array of
+    # height Sm and depth Sk reduces (Sm*Sk) of K per pass; rescale by the
+    # pass-count ratio. Kept for backward compatibility with old configs.
+    measured_height = Sn
     if Sk <= 1 and Sm == Sn:
-        return cycle_list  # square 2D array: identical to before, no correction
+        return cycle_list                          # square 2D: identical to before
+
     if len(cycle_list) != len(compute_types):
         # Should not happen (one cycle per compute node); stay safe rather than corrupt.
         logger.warning("[3D-PE] cycle/compute-node count mismatch (%d vs %d); skipping correction",
                        len(cycle_list), len(compute_types))
         return cycle_list
     if k_tile and k_tile > 0:
-        passes_measured = math.ceil(k_tile / Sn)           # gem5 square (height = Sn)
-        passes_target = math.ceil(k_tile / (Sm * Sk))      # target height Sm + depth Sk
+        passes_measured = math.ceil(k_tile / measured_height)
+        passes_target = math.ceil(k_tile / (Sm * Sk))      # 3D: Sm height x Sk depth
         ratio = passes_target / passes_measured
     else:
         ratio = None
@@ -68,8 +84,8 @@ def _scale_cycles_for_3d_pe(cycle_list, compute_types, k_tile, plane_size):
             scaled.append(max(1, math.ceil(c / Sk)))  # K tile unknown: conservative
         else:
             scaled.append(max(1, round(c * ratio)))   # GEMM: corrected K-pass count
-    logger.info("[3D-PE] Sm=%d, Sn=%d, Sk=%d, K_t=%s, pass_ratio=%s: cycles %s -> %s (GEMM only)",
-                Sm, Sn, Sk, k_tile,
+    logger.info("[3D-PE] real=%s Sm=%d Sn=%d Sk=%d K_t=%s base_h=%d pass_ratio=%s: cycles %s -> %s (GEMM only)",
+                real, Sm, Sn, Sk, k_tile, measured_height,
                 None if ratio is None else round(ratio, 3), cycle_list, scaled)
     return scaled
 
@@ -96,6 +112,26 @@ def dump_metadata(args, arg_attributes, path):
             file.write(f'{arg_name}=({arg_attribute[0]}, {arg.dtype}, {arg.shape})\n')
     return
 
+def _rect_height_opt(vectorlane_size):
+    """Extra ``systolic-array-height=<Sm*Sk>`` token for the pytorchsim-to-vcix pass.
+
+    The depth Sk's dominant timing effect is the reduced PASS COUNT: a 3D array
+    of height Sm and depth Sk reduces Sm*Sk of K per pass, so K is tiled by
+    Sm*Sk (passes = K/(Sm*Sk)). This is expressed through the MLIR instruction
+    stream (fewer vpush/compute), which is what actually drives gem5's cycles.
+    gem5 additionally receives Sm (--vlane-height, fill) and Sk (--vlane-depth,
+    adder-tree latency) so it reports the true 3D geometry (WxHxD). Empty when
+    Sm*Sk == Sn (== the default square tiling) or real mode is off.
+    """
+    if not extension_config.systolic_array_real_rect:
+        return ""
+    sm = extension_config.systolic_array_height or vectorlane_size
+    sk = extension_config.systolic_array_size_k or 1
+    k_per_pass = sm * sk
+    if k_per_pass == vectorlane_size:
+        return ""
+    return f" systolic-array-height={k_per_pass}"
+
 def mlir_compile_command(filename, vectorlane_size, vlen=256):
     return [re.sub(r"[ \n]+", " ",
         f"""
@@ -103,7 +139,7 @@ def mlir_compile_command(filename, vectorlane_size, vlen=256):
             -test-loop-padding \
             -dma-fine-grained='systolic-array-size={vectorlane_size}' \
             -global-idx='vlen={vlen}' \
-            -test-pytorchsim-to-vcix='systolic-array-size={vectorlane_size} vlen={vlen}' \
+            -test-pytorchsim-to-vcix='systolic-array-size={vectorlane_size}{_rect_height_opt(vectorlane_size)} vlen={vlen}' \
             -test-memref-to-gemmini="vectorlane={vectorlane_size}" \
             -convert-linalg-to-loops \
             -convert-vector-to-scf='full-unroll' \
@@ -153,7 +189,7 @@ def mlir_gem5_compile_command(filename, sample_filename, tog_file, vectorlane_si
             -test-loop-padding='timing_mode=1' \
             -dma-fine-grained='systolic-array-size={vectorlane_size}' \
             -global-idx='vlen={vlen}' \
-            -test-pytorchsim-to-vcix='systolic-array-size={vectorlane_size} vlen={vlen}' \
+            -test-pytorchsim-to-vcix='systolic-array-size={vectorlane_size}{_rect_height_opt(vectorlane_size)} vlen={vlen}' \
             -test-tile-operation-graph='vectorlane={vectorlane_size} sample-mode={extension_config.CONFIG_TLS_MODE}' \
             -test-memref-to-gemmini="vectorlane={vectorlane_size} timing=1" \
             -convert-linalg-to-loops \
@@ -228,7 +264,16 @@ class MLIRCodeCache:
         os.makedirs(write_path, exist_ok=True)
         lock = FileLock(get_lock_path(write_path), timeout=LOCK_TIMEOUT)
 
-        if spad_info is not None:
+        if spad_info is not None and 'imem_vaddr' in spad_info:
+            # 3-way IMEM/WMEM/OMEM split: place each bank's linker section at
+            # its own base address so weight/output tiles actually land in
+            # their dedicated region instead of being packed into IMEM.
+            link_option = (
+                f"-Wl,--section-start=.imem=0x{spad_info['imem_vaddr']:x} "
+                f"-Wl,--section-start=.wmem=0x{spad_info['wmem_vaddr']:x} "
+                f"-Wl,--section-start=.omem=0x{spad_info['omem_vaddr']:x}"
+            )
+        elif spad_info is not None:
             link_option = f"-Wl,--section-start=.spad=0x{spad_info['spad_vaddr']:x}"
         else:
             link_option = ""

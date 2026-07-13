@@ -52,9 +52,18 @@ def __getattr__(name):
     with open(config_path, 'r') as f:
         config_yaml = yaml.safe_load(f)
 
-    # Hardware info config
-    if name == "vpu_num_lanes":
-        return config_yaml["vpu_num_lanes"]
+    # Hardware info config.
+    # Config field names (intuitive):
+    #   pe_M  = PE array token dim (M)      [internal: systolic_array_height / Sm]
+    #   pe_N  = PE array output-channel (N) [internal: vpu_num_lanes / Sn = array width]
+    #   pe_P  = PE array input-channel (P)  [internal: systolic_array_size_k / Sk = depth]
+    #   simd_K   = 1D SIMD lane count
+    #   simd_bit = 1D SIMD per-lane bit width [internal: vpu_vector_length_bits]
+    # Old field names are still accepted as fallback.
+    if name == "vpu_num_lanes":                          # PE array width Sn (= pe_N)
+        return config_yaml.get("pe_N", config_yaml.get("vpu_num_lanes"))
+    if name == "vpu_simd_lanes":                         # 1D SIMD lane count (K)
+        return config_yaml.get("simd_K", config_yaml.get("pe_N", config_yaml.get("vpu_num_lanes")))
     if name == "CONFIG_SPAD_INFO":
         # Check if IMEM/WMEM/OMEM are configured
         if "imem_num_banks" in config_yaml:
@@ -94,8 +103,8 @@ def __getattr__(name):
 
     if name == "CONFIG_NUM_CORES":
         return config_yaml["num_cores"]
-    if name == "vpu_vector_length_bits":
-        return config_yaml["vpu_vector_length_bits"]
+    if name == "vpu_vector_length_bits":                 # 1D SIMD per-lane bit width (= simd_bit)
+        return config_yaml.get("simd_bit", config_yaml.get("vpu_vector_length_bits"))
 
     if name == "pytorchsim_functional_mode":
         return config_yaml['pytorchsim_functional_mode']
@@ -106,15 +115,31 @@ def __getattr__(name):
     # Sk=1 => classic 2D systolic array (identical cycles to before).
     # Sk>1 => the K reduction is parallelized across Sk PEs, so the
     # reduction-dominated part of each GEMM tile's measured cycle shrinks ~1/Sk.
-    if name == "systolic_array_size_k":
-        return config_yaml.get("systolic_array_size_k", 1)
+    if name == "systolic_array_size_k":                  # PE array depth P (= pe_P)
+        return config_yaml.get("pe_P", config_yaml.get("systolic_array_size_k", 1))
 
-    # 3D PE array: array HEIGHT Sm (the K-reduction dimension). gem5 always
-    # measures a SQUARE array of side vpu_num_lanes (= the width Sn), so a
-    # rectangular height Sm != Sn is modeled by post-correcting only the
-    # K-pass count. Defaults to vpu_num_lanes (square, no correction).
-    if name == "systolic_array_height":
-        return config_yaml.get("systolic_array_height", config_yaml["vpu_num_lanes"])
+    # 3D PE array: array HEIGHT Sm (token dim M). Defaults to the width N
+    # (square) when not given.
+    if name == "systolic_array_height":                  # PE array token M (= pe_M)
+        _N = config_yaml.get("pe_N", config_yaml.get("vpu_num_lanes"))
+        return config_yaml.get("pe_M", config_yaml.get("systolic_array_height", _N))
+
+    # Rectangular PE array modelling mode.
+    #   False (default): gem5 measures a SQUARE array; systolic_array_height is
+    #     applied as a post-hoc cycle approximation (_scale_cycles_for_3d_pe).
+    #   True: the height Sm is threaded into the MLIR passes (K tiled by Sm) and
+    #     into gem5 (--vlane-height, saSize = Sm+Sn-1) so the rectangular array is
+    #     simulated directly -- no approximation. Requires a rebuilt mlir-opt that
+    #     understands `systolic-array-height`.
+    if name == "systolic_array_real_rect":
+        # Explicit override wins; otherwise auto-enable whenever the PE array
+        # geometry is non-square (pe_M != pe_N) or has depth (pe_P > 1).
+        if "systolic_array_real_rect" in config_yaml:
+            return bool(config_yaml["systolic_array_real_rect"])
+        _N = config_yaml.get("pe_N", config_yaml.get("vpu_num_lanes"))
+        _M = config_yaml.get("pe_M", config_yaml.get("systolic_array_height", _N))
+        _P = config_yaml.get("pe_P", config_yaml.get("systolic_array_size_k", 1))
+        return (_M != _N) or (_P > 1)
 
     # Mapping strategy
     if name == "codegen_mapping_strategy":

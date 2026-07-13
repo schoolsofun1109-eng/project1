@@ -172,10 +172,28 @@ void Simulator::icnt_cycle() {
     }
   }
   if (_icnt_interval!=0 && _icnt_cycle % _icnt_interval == 0) {
-    spdlog::info("[ICNT] Core->ICNT request {}GB/Sec", ((_memory_req_size*_nr_from_core*(1000/_icnt_period)/_icnt_interval)));
-    spdlog::info("[ICNT] Core<-ICNT request {}GB/Sec", ((_memory_req_size*_nr_to_core*(1000/_icnt_period)/_icnt_interval)));
-    spdlog::info("[ICNT] ICNT->MEM request {}GB/Sec", ((_memory_req_size*_nr_to_mem*(1000/_icnt_period)/_icnt_interval)));
-    spdlog::info("[ICNT] ICNT<-MEM request {}GB/Sec", ((_memory_req_size*_nr_from_mem*(1000/_icnt_period)/_icnt_interval)));
+    // GB/s = bytes-per-request * request-count * 1000 / (icnt_period[ps] * interval[cycles]).
+    // Was integer arithmetic: "1000/_icnt_period" truncated to 0 for any
+    // icnt_freq_mhz < 1000 (_icnt_period > 1000ps), zeroing every line
+    // regardless of actual traffic. Force double math so the 1000 numerator
+    // isn't divided away before multiplying by the (potentially large)
+    // byte/request-count terms.
+    double icnt_bw_denom = static_cast<double>(_icnt_period) * _icnt_interval;
+    // Peak GB/s = every port pushing/popping one request every icnt cycle:
+    // bytes/req * port_count * 1000 / icnt_period[ps]. Core-side ports serve
+    // both Core->ICNT and Core<-ICNT; mem-side ports (one per DRAM channel)
+    // serve ICNT->MEM/ICNT<-MEM. Verified against a saturated 256^3 matmul:
+    // 16 ports * 32B * 940MHz = 481.28GB/s matched the observed ceiling.
+    double core_side_peak = static_cast<double>(_memory_req_size) * (_n_cores * _noc_node_per_core) * 1000.0 / _icnt_period;
+    double mem_side_peak = static_cast<double>(_memory_req_size) * _n_memories * 1000.0 / _icnt_period;
+    double bw_from_core = static_cast<double>(_memory_req_size)*_nr_from_core*1000.0/icnt_bw_denom;
+    double bw_to_core = static_cast<double>(_memory_req_size)*_nr_to_core*1000.0/icnt_bw_denom;
+    double bw_to_mem = static_cast<double>(_memory_req_size)*_nr_to_mem*1000.0/icnt_bw_denom;
+    double bw_from_mem = static_cast<double>(_memory_req_size)*_nr_from_mem*1000.0/icnt_bw_denom;
+    spdlog::info("[ICNT] Core->ICNT request {:.3f}GB/Sec, {:.2f}% of utilization", bw_from_core, bw_from_core*100.0/core_side_peak);
+    spdlog::info("[ICNT] Core<-ICNT request {:.3f}GB/Sec, {:.2f}% of utilization", bw_to_core, bw_to_core*100.0/core_side_peak);
+    spdlog::info("[ICNT] ICNT->MEM request {:.3f}GB/Sec, {:.2f}% of utilization", bw_to_mem, bw_to_mem*100.0/mem_side_peak);
+    spdlog::info("[ICNT] ICNT<-MEM request {:.3f}GB/Sec, {:.2f}% of utilization", bw_from_mem, bw_from_mem*100.0/mem_side_peak);
     _nr_from_core=0;
     _nr_to_core=0;
     _nr_to_mem=0;

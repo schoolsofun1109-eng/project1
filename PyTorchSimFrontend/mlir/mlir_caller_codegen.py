@@ -238,23 +238,33 @@ class MLIRKernelCallerCodeGen():
                     dynamic_expr = f"{base} + {scale} * vlenb"
 
     def get_spad_size(self, binary_path):
+        # Supports both the legacy unified ".spad" section and the 3-way
+        # ".imem"/".wmem"/".omem" split (see BaseMLIRHardwareInfo.spad_section
+        # in mlir_common.py). Returns the sum of used bytes across whichever
+        # sections are actually present, so the overflow check in
+        # CustomMLIRCodeCache.load() keeps working unchanged either way.
         cmd = ["riscv64-unknown-elf-readelf", "-s", binary_path]
         result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         if result.returncode != 0:
             raise RuntimeError(f"Readelf error: {result.stderr}")
 
         output = result.stdout
-        spad_start = None
-        spad_end = None
+        section_starts = {}
+        end_symbols = {}
         for line in output.splitlines():
-            if '.spad' in line and 'SECTION' in line:
-                parts = line.split()
-                spad_start = int(parts[1], 16)
-            elif 'spad_end' in line:
-                parts = line.split()
-                spad_end = int(parts[1], 16)
+            parts = line.split()
+            if not parts:
+                continue
+            if 'SECTION' in line:
+                for sec in (".spad", ".imem", ".wmem", ".omem"):
+                    if sec in line:
+                        section_starts[sec] = int(parts[1], 16)
+            elif parts[-1] in ("spad_end", "imem_end", "wmem_end", "omem_end"):
+                end_symbols[parts[-1]] = int(parts[1], 16)
 
-        if spad_start is None or spad_end is None:
-            return 0
-        spad_size = spad_end - spad_start
-        return spad_size
+        total = 0
+        for sec, end_sym in ((".spad", "spad_end"), (".imem", "imem_end"),
+                              (".wmem", "wmem_end"), (".omem", "omem_end")):
+            if sec in section_starts and end_sym in end_symbols:
+                total += max(0, end_symbols[end_sym] - section_starts[sec])
+        return total

@@ -459,6 +459,79 @@ def test_matmul(device, input_size=128, hidden_size=128, output_size=128):
     y = custom_matmul(x2, w2)
     test_result("Matmul Forward", res, y, m=input_size, n=output_size, k=hidden_size, log_file=log_file)
 
+def test_matmul_golden(device):
+    """Hand-verifiable golden case for SA/memory validation.
+
+    A(2x4) @ B(4x2) with fixed integer values:
+        A = [[1,2,3,4],
+             [5,6,7,8]]
+        B = [[1,2],[3,4],[5,6],[7,8]]
+        A@B = [[  1+6+15+28 ,  2+8+18+32 ],   = [[ 50,  60],
+               [ 5+18+35+56, 10+24+42+64]]      [114, 140]]
+    Run with SPIKE_DEBUG=1 | tileflow.py to check the DRAIN (SA output) values
+    equal 50/60/114/140 by hand.
+    """
+    def custom_matmul(a, b):
+        return torch.matmul(a, b)
+
+    A = torch.tensor([[1., 2., 3., 4.],
+                      [5., 6., 7., 8.]])
+    B = torch.tensor([[1., 2.],
+                      [3., 4.],
+                      [5., 6.],
+                      [7., 8.]])
+    expected = A @ B
+    print("=================== GOLDEN A(2x4) @ B(4x2) ===================")
+    print("A =", A.tolist())
+    print("B =", B.tolist())
+    print("HAND/CPU expected =", expected.tolist(), " -> [[50,60],[114,140]]")
+
+    x1, w1 = A.to(device), B.to(device)
+    opt_fn, before_snapshot = compile_with_stdout_capture(custom_matmul)
+    if opt_fn is None:
+        print("[ERROR] Failed to compile function")
+        return
+    res = opt_fn(x1, w1)
+    npu = res.cpu()
+    print("NPU out =", npu.tolist())
+    match = torch.allclose(npu, expected, atol=1e-2)
+    print("GOLDEN MATCH =", bool(match))
+    test_result("Matmul Golden", res, expected, m=2, n=2, k=4)
+
+def test_golden_cases(device, case=0):
+    """Hand-verifiable golden matmul cases for SA/dataflow validation.
+
+    Run with SPIKE_DEBUG=1 | tileflow.py to see the DRAM->SRAM->SA->DRAM flow
+    and check each stage's values by hand. Cases with K>128 exercise multiple
+    K-passes (the 128-tall array reduces K in 128-chunks).
+    """
+    def mm(a, b):
+        return torch.matmul(a, b)
+    cases = [
+        # name, A, B  (all hand-verifiable)
+        ("2x4 @ 4x2  (K=4, single pass)",
+         torch.tensor([[1.,2,3,4],[5,6,7,8]]), torch.tensor([[1.,2],[3,4],[5,6],[7,8]])),
+        ("2x8 @ 8x2  (all 2 * all 3 -> 8*6=48, K=8)",
+         torch.full((2,8),2.), torch.full((8,2),3.)),
+        ("2x128 @ 128x2  (ones -> 128, K=128 = exactly 1 full pass)",
+         torch.ones(2,128), torch.ones(128,2)),
+        ("2x256 @ 256x2  (ones -> 256, K=256 = 2 K-passes, accumulate)",
+         torch.ones(2,256), torch.ones(256,2)),
+        ("2x384 @ 384x2  (ones -> 384, K=384 = 3 K-passes)",
+         torch.ones(2,384), torch.ones(384,2)),
+    ]
+    name, A, B = cases[case]
+    exp = A @ B
+    print(f"=============== GOLDEN CASE {case}: {name} ===============")
+    print(f"  A shape {tuple(A.shape)}, B shape {tuple(B.shape)}, K={A.shape[1]}, K-passes(128-array)={-(-A.shape[1]//128)}")
+    print(f"  HAND/CPU expected row0 = {exp[0].tolist()[:4]}{' ...' if exp.shape[1]>4 else ''}")
+    opt_fn, _ = compile_with_stdout_capture(mm)
+    if opt_fn is None:
+        print("  [ERROR] compile failed"); return
+    res = opt_fn(A.to(device), B.to(device)).cpu()
+    print(f"  NPU out row0          = {res[0].tolist()[:4]}{' ...' if res.shape[1]>4 else ''}")
+    print(f"  GOLDEN MATCH = {bool(torch.allclose(res, exp, atol=1e-2))}")
+
 def test_addmm(device, input_size=128, hidden_size=128, output_size=128, bias_rank=1):
     """Test addmm operation with stdout-based log tracking."""
     def custom_matmul(bias, a, b):

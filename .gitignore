@@ -1,0 +1,13 @@
+# Build artifacts
+TOGSim/build/
+__pycache__/
+*.pyc
+*.so
+*.o
+
+# Third-party sources (see .gitmodules; re-fetch with git submodule update --init)
+TOGSim/extern/
+
+# Simulation outputs (regenerable; ~2GB)
+outputs/
+togsim_results/

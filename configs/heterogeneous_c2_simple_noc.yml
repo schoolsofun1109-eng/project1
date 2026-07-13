@@ -7,11 +7,16 @@ core_freq_mhz: 940
 core_stats_print_period_cycles: 10000
 num_stonne_per_core: 8
 num_stonne_port: 64
-num_systolic_array_per_core: 2
+num_systolic_array_per_core: 1
 
-vpu_num_lanes: 128
-vpu_spad_size_kb_per_lane: 128
-vpu_vector_length_bits: 256
+# ===== PE Array:  M(token) x N(output-ch) x P(input-ch) =====
+pe_M: 128
+pe_N: 128
+pe_P: 1
+
+# ===== 1D SIMD =====
+simd_K: 128
+simd_bit: 256
 
 dram_type: ramulator2
 dram_freq_mhz: 940
@@ -33,3 +38,16 @@ codegen_external_mapping_file: ''
 codegen_autotune_max_retry: 10
 codegen_autotune_template_topk: 4
 codegen_compiler_optimization: all
+
+# --- IMEM/WMEM/OMEM (3-way split SRAM, our NPU format) - 128KB each ---
+imem_num_banks: 8
+imem_sram_bitwidth: 256
+imem_sram_depth: 512
+
+wmem_num_banks: 8
+wmem_sram_bitwidth: 256
+wmem_sram_depth: 512
+
+omem_num_banks: 8
+omem_sram_bitwidth: 256
+omem_sram_depth: 512

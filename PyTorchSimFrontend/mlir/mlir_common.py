@@ -618,6 +618,42 @@ class BaseMLIRHardwareInfo():
         self.num_cores = extension_config.CONFIG_NUM_CORES
         self.vlen = extension_config.vpu_vector_length_bits
 
+    def spad_section(self, role=None):
+        """Linker section for an on-chip SRAM buffer, routed by tensor role.
+
+        role is the "X"/"W"/"Y" (input/weight/output) name templates pass to
+        def_sram_buffer(). Weight buffers go to .wmem, output buffers to
+        .omem, everything else (inputs, internal scratch) to .imem. Falls
+        back to the single unified ".spad" section when IMEM/WMEM/OMEM are
+        not configured (CONFIG_SPAD_INFO's legacy branch).
+        """
+        if "imem_vaddr" not in self.spad_info:
+            return ".spad"
+        if role and role.startswith("W"):
+            return ".wmem"
+        if role and role.startswith("Y"):
+            return ".omem"
+        return ".imem"
+
+    def spad_end_symbols(self):
+        """C globals marking the highest address used in each SRAM section.
+
+        Declared *after* all buffer globals in the header, so the linker
+        (which places same-section symbols in declaration order) puts these
+        at each section's high-water mark; get_spad_size() reads them back
+        via readelf to check for scratchpad overflow.
+        """
+        if "imem_vaddr" not in self.spad_info:
+            return (
+                "int spad_end[0] __attribute__ ((section(\".spad\")));\n"
+                f"int spad_section_end[0] __attribute__ ((section(\".spad\"), aligned({self.spad_info['spad_size']*self.vector_lane})));"
+            )
+        return (
+            "int imem_end[0] __attribute__ ((section(\".imem\")));\n"
+            "int wmem_end[0] __attribute__ ((section(\".wmem\")));\n"
+            "int omem_end[0] __attribute__ ((section(\".omem\")));\n"
+        )
+
 class BaseMLIRKernel(common.Kernel, BaseMLIRHardwareInfo):
     newvar_prefix = "%"
     suffix = ""

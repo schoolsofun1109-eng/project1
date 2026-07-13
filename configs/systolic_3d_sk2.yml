@@ -1,11 +1,16 @@
 num_cores: 1
 core_freq_mhz: 940
 core_stats_print_period_cycles: 10000
-num_systolic_array_per_core: 2
+num_systolic_array_per_core: 1
 
-vpu_num_lanes: 128
-vpu_vector_length_bits: 256
-vpu_spad_size_kb_per_lane: 128
+# ===== PE Array:  M(token) x N(output-ch) x P(input-ch) =====
+pe_M: 128
+pe_N: 128
+pe_P: 2
+
+# ===== 1D SIMD =====
+simd_K: 128
+simd_bit: 256
 
 dram_type: ramulator2
 dram_freq_mhz: 940
@@ -33,7 +38,13 @@ omem_num_banks: 8
 omem_sram_bitwidth: 256
 omem_sram_depth: 512
 
-pytorchsim_functional_mode: true
+# Spike's systolic_array.{h,cc} hardcodes a single square sa_dim used for both
+# K-depth and N-width, so it cannot correctly validate Sk>1 (3D depth) or
+# Sm!=Sn (rect) arrays -- confirmed: Sk=2 K=256 case returns 128 (drops the
+# 2nd K-pass) instead of 256. Matches the same accuracy-bypass already used by
+# the sibling rect_*_real.yml configs. Timing (gem5/TOGSim cycles, util, BW)
+# is unaffected and remains real.
+pytorchsim_functional_mode: false
 pytorchsim_timing_mode: true
 
 codegen_mapping_strategy: heuristic
@@ -43,4 +54,3 @@ codegen_autotune_template_topk: 5
 codegen_compiler_optimization: all
 
 # 3D PE array: K-reduction depth
-systolic_array_size_k: 2

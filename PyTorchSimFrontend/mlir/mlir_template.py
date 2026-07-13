@@ -211,6 +211,17 @@ class MLIRTemplateKernel(MLIRKernel, BaseMLIRHardwareInfo):
         spad_size = spad_size_per_lane * self.vector_lane
         max_spad_size = spad_size // 2 # double buffer
         max_spad_per_lane = spad_size_per_lane // 2 # double buffer
+        # IMEM/WMEM/OMEM are separate hard-bounded linker sections (see
+        # BaseMLIRHardwareInfo.spad_section), not one fungible pool -- a
+        # candidate whose *combined* footprint fits max_spad_per_lane can
+        # still have e.g. its weight tile alone overflow WMEM (that overflow
+        # doesn't borrow headroom from IMEM/OMEM, it fails to link). Check
+        # each region's own budget individually when they're configured.
+        has_regions = "imem_vaddr" in self.spad_info
+        if has_regions:
+            max_imem_per_lane = (self.spad_info["imem_size"] // self.vector_lane) // 2
+            max_wmem_per_lane = (self.spad_info["wmem_size"] // self.vector_lane) // 2
+            max_omem_per_lane = (self.spad_info["omem_size"] // self.vector_lane) // 2
         minimum_n_tile = self.num_cores if min_tile else 1
         m_pad_factor = self.vector_lane if M > self.vector_lane else 8
         n_pad_factor = self.vector_lane if N > self.vector_lane else 8
@@ -239,6 +250,11 @@ class MLIRTemplateKernel(MLIRKernel, BaseMLIRHardwareInfo):
                     output_size_per_lane = self.get_spad_size_per_lane(tile_M * (1 + n_extra_node), tile_N)
                     used_spad_size_per_lane = (weight_size_per_lane + input_size_per_lane + output_size_per_lane) * precision_bytes
                     check_spad_size = (used_spad_size < max_spad_size and used_spad_size_per_lane < max_spad_per_lane)
+                    if has_regions:
+                        check_spad_size = (check_spad_size
+                            and input_size_per_lane * precision_bytes <= max_imem_per_lane
+                            and weight_size_per_lane * precision_bytes <= max_wmem_per_lane
+                            and output_size_per_lane * precision_bytes <= max_omem_per_lane)
                     if check_spad_size:
                         dir_path = f"{extension_config.CONFIG_TORCHSIM_DIR}/validation/gemm_candidates"
                         os.makedirs(dir_path, exist_ok=True)
@@ -266,6 +282,11 @@ class MLIRTemplateKernel(MLIRKernel, BaseMLIRHardwareInfo):
                     used_spad_size_per_lane = (weight_size_per_lane + input_size_per_lane + output_size_per_lane) * precision_bytes
                     n_tile = math.ceil(M / max(tile_M, 128)) * math.ceil(N / max(tile_N, 128))
                     check_spad_size = (used_spad_size < max_spad_size and used_spad_size_per_lane < max_spad_per_lane)
+                    if has_regions:
+                        check_spad_size = (check_spad_size
+                            and input_size_per_lane * precision_bytes <= max_imem_per_lane
+                            and weight_size_per_lane * precision_bytes <= max_wmem_per_lane
+                            and output_size_per_lane * precision_bytes <= max_omem_per_lane)
                     if check_spad_size and max_used_spad_size < used_spad_size and maximize_i_j <= tile_M * tile_N and n_tile >= minimum_n_tile and max(tile_N, 128) // max(tile_M, 128) < 10:
                         max_used_spad_size = used_spad_size
                         maximize_i_j = tile_M * tile_N
@@ -615,9 +636,6 @@ class MLIRTemplateKernel(MLIRKernel, BaseMLIRHardwareInfo):
     def _prepare_simulator_headers(self, src_code):
         from filelock import FileLock
 
-        spad_end_symbol = f"int spad_end[0] __attribute__ ((section(\".spad\")));\n"
-        spad_section_end_symbol = f"int spad_section_end[0] __attribute__ ((section(\".spad\"), aligned({self.spad_info['spad_size']*self.vector_lane})));"
-
         write_path = extension_codecache.get_write_path(src_code)
         os.makedirs(write_path, exist_ok=True)
         spike_write_path = os.path.join(write_path, "global_var.h")
@@ -626,7 +644,7 @@ class MLIRTemplateKernel(MLIRKernel, BaseMLIRHardwareInfo):
         lock = FileLock(extension_codecache.get_lock_path(write_path), timeout=extension_codecache.LOCK_TIMEOUT)
         with lock:
             if not os.path.exists(spike_write_path):
-                write_atomic(spike_write_path, self.header.getvalue()+spad_end_symbol+spad_section_end_symbol)
+                write_atomic(spike_write_path, self.header.getvalue()+self.spad_end_symbols())
             if not os.path.exists(gem5_write_path):
                 write_atomic(gem5_write_path, self.gem5_header.getvalue())
 

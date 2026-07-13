@@ -8,6 +8,7 @@
 #include <iomanip>
 #include <sstream>
 #include <ctime>
+#include <cstdlib>
 
 namespace at::openreg {
 
@@ -109,22 +110,31 @@ at::Tensor wrapper_view(const at::Tensor& self, c10::SymIntArrayRef size) {
 void wrapper_cpu_fallback(
     const c10::OperatorHandle& op,
     torch::jit::Stack* stack) {
-  const auto& op_name = op.schema().operator_name();
+  // Log which op fell back to CPU (no native NPU kernel). This is purely
+  // informational and very verbose, so it is off by default. Enable it with
+  // environment variable PYTORCHSIM_LOG_EAGER_FALLBACK=1 when you need to see
+  // which operators are not accelerated.
+  static const bool log_fallback =
+      std::getenv("PYTORCHSIM_LOG_EAGER_FALLBACK") != nullptr;
 
-  // Generate timestamp in format [YYYY-MM-DD HH:MM:SS.mmm]
-  auto now = std::chrono::system_clock::now();
-  auto time_t = std::chrono::system_clock::to_time_t(now);
-  auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-      now.time_since_epoch()) % 1000;
+  if (log_fallback) {
+    const auto& op_name = op.schema().operator_name();
 
-  std::tm tm_buf;
-  localtime_r(&time_t, &tm_buf);
+    // Generate timestamp in format [YYYY-MM-DD HH:MM:SS.mmm]
+    auto now = std::chrono::system_clock::now();
+    auto time_t = std::chrono::system_clock::to_time_t(now);
+    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        now.time_since_epoch()) % 1000;
 
-  std::ostringstream oss;
-  oss << std::put_time(&tm_buf, "%Y-%m-%d %H:%M:%S");
-  oss << '.' << std::setfill('0') << std::setw(3) << ms.count();
+    std::tm tm_buf;
+    localtime_r(&time_t, &tm_buf);
 
-  std::cerr << "[" << oss.str() << "] [INFO] [PyTorchSimDevice] [Eager Mode] Operator: " << op_name << std::endl;
+    std::ostringstream oss;
+    oss << std::put_time(&tm_buf, "%Y-%m-%d %H:%M:%S");
+    oss << '.' << std::setfill('0') << std::setw(3) << ms.count();
+
+    std::cerr << "[" << oss.str() << "] [INFO] [PyTorchSimDevice] [Eager Mode] Operator: " << op_name << std::endl;
+  }
 
   at::native::openreg::cpu_fallback(op, stack);
 }
