@@ -1,0 +1,99 @@
+From 1067f12873e764eba56fa51c33fa9bcb23e70199 Mon Sep 17 00:00:00 2001
+From: Hyeongseo Kwon <gy4372@kaist.ac.kr>
+Date: Mon, 13 Jul 2026 09:54:00 +0900
+Subject: [PATCH] WIP: rectangular/3D array support
+
+Backup commit ahead of GPU machine migration.
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+---
+ src/cpu/minor/BaseMinorCPU.py |  1 +
+ src/cpu/minor/execute.cc      |  3 ++-
+ src/cpu/minor/func_unit.hh    | 14 ++++++++++++--
+ 3 files changed, 15 insertions(+), 3 deletions(-)
+
+diff --git a/src/cpu/minor/BaseMinorCPU.py b/src/cpu/minor/BaseMinorCPU.py
+index f3c12a0..8e4f01c 100644
+--- a/src/cpu/minor/BaseMinorCPU.py
++++ b/src/cpu/minor/BaseMinorCPU.py
+@@ -134,6 +134,7 @@ class MinorFU(SimObject):
+     unitType = Param.String("", "Base, SystolicArray, SparseAccelerator")
+     systolicArrayWidth = Param.Int(128, "systolic array width")
+     systolicArrayHeight = Param.Int(128, "systolic array height")
++    systolicArrayDepth = Param.Int(1, "systolic array depth (Sk, parallel K-reduction layers)")
+     issueLat = Param.Cycles(
+         1, "cycles until another instruction can be issued"
+     )
+diff --git a/src/cpu/minor/execute.cc b/src/cpu/minor/execute.cc
+index 1504daf..4cf83a0 100644
+--- a/src/cpu/minor/execute.cc
++++ b/src/cpu/minor/execute.cc
+@@ -179,6 +179,7 @@ Execute::Execute(const std::string &name_,
+ 			DSParams->opLat = temp_fu->opLat;
+ 			DSParams->systolicArrayWidth = temp_fu->systolicArrayWidth;
+ 			DSParams->systolicArrayHeight = temp_fu->systolicArrayHeight;
++			DSParams->systolicArrayDepth = temp_fu->systolicArrayDepth;
+ 			DSParams->issueLat = temp_fu->issueLat;
+ 			DSParams->cantForwardFromFUIndices = temp_fu->cantForwardFromFUIndices;
+ 			DSParams->timings = temp_fu->timings;
+@@ -186,7 +187,7 @@ Execute::Execute(const std::string &name_,
+ 
+ 		    std::cout << "Creating SystolicArrayFU with DSParams" << std::endl;
+ 		    std::cout << "opLat: " << DSParams->opLat << std::endl;
+-		    std::cout << "SystolicArray: " << DSParams->systolicArrayWidth << "x" << DSParams->systolicArrayHeight << std::endl;
++		    std::cout << "SystolicArray: " << DSParams->systolicArrayWidth << "x" << DSParams->systolicArrayHeight << "x" << DSParams->systolicArrayDepth << std::endl;
+ 		    std::cout << "issueLat: " << DSParams->issueLat << std::endl;
+ 		    std::cout << "Number of timings: " << DSParams->timings.size() << std::endl;
+ 
+diff --git a/src/cpu/minor/func_unit.hh b/src/cpu/minor/func_unit.hh
+index 09cba05..f0d323e 100644
+--- a/src/cpu/minor/func_unit.hh
++++ b/src/cpu/minor/func_unit.hh
+@@ -183,6 +183,7 @@ class MinorFU : public SimObject
+ 	std::string unitType;
+ 	int systolicArrayWidth;
+ 	int systolicArrayHeight;
++	int systolicArrayDepth;
+ 
+   public:
+     MinorFU(const MinorFUParams &params) :
+@@ -194,7 +195,8 @@ class MinorFU : public SimObject
+         timings(params.timings),
+ 		unitType(params.unitType),
+ 		systolicArrayWidth(params.systolicArrayWidth),
+-		systolicArrayHeight(params.systolicArrayHeight)
++		systolicArrayHeight(params.systolicArrayHeight),
++		systolicArrayDepth(params.systolicArrayDepth)
+     { }
+ 
+ 	virtual ~MinorFU() = default;
+@@ -214,6 +216,7 @@ class SystolicArrayFU : public MinorFU
+ 	bool w_Trigger = false;
+ 	int serializerSize = 256;
+ 	int saSize;
++	int saDepth;      // 3D depth Sk: number of parallel K-reduction layers
+ 	uint64_t i_Trigger;
+ 
+ 	std::queue<int> wQueue;
+@@ -232,10 +235,17 @@ class SystolicArrayFU : public MinorFU
+ 		is_oqueue_empty(true),
+ 		is_processing(false),
+ 		saSize(params.systolicArrayWidth + params.systolicArrayHeight - 1),
++		saDepth(params.systolicArrayDepth < 1 ? 1 : params.systolicArrayDepth),
+ 		process_cycle(0),
+ 		index(0),
+ 		last_cycle(0)
+-    { }
++    {
++		// 3D array: Sk parallel K-reduction layers add a ceil(log2(Sk))-cycle
++		// adder-tree latency on top of the 2D fill/drain (Sk=1 -> +0).
++		int d = saDepth, tree = 0;
++		while (d > 1) { d = (d + 1) / 2; tree++; }
++		saSize += tree;
++	}
+ 
+ 	void pushWeight(int size, uint64_t cycle) {
+ 		if (!w_Trigger) {
+-- 
+2.25.1
+

@@ -11,3 +11,7 @@ TOGSim/extern/
 # Simulation outputs (regenerable; ~2GB)
 outputs/
 togsim_results/
+
+# Claude Code
+.claude/worktrees/
+.claude/scheduled_tasks.lock

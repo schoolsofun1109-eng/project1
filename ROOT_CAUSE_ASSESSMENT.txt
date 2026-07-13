@@ -1,0 +1,105 @@
+FINAL VALIDATION TEST RESULTS - RECTANGULAR MATMUL WITH BUFFER COLLISION FIX (commit 66d0acd)
+============================================================================================
+
+TESTS RUN: 10 total
+PASSED: 3/10 (30%)
+FAILED: 7/10 (70%)
+
+RESULTS BY TEST:
+================
+
+Test 1: test_matmul(128x256x256)
+Status: FAILED
+Max diff: 78.04
+Pattern: First/last columns correct, middle columns wrong (N-split issue)
+
+Test 2: test_matmul(128x63x56)
+Status: FAILED
+Max diff: 19.89
+Pattern: Last row zeros (partial output truncation)
+
+Test 3: test_addmm(128x256x512)
+Status: FAILED
+Max diff: 69.44
+Pattern: Scattered differences across output matrix
+
+Test 4: test_addmm(128x256x512)
+Status: FAILED
+Max diff: 69.44
+Pattern: Same as Test 3 (duplicate test)
+
+Test 5: test_addmm(129x61x56)
+Status: FAILED
+Max diff: 20.22
+Pattern: Last rows have zeros/mismatches (incomplete output)
+
+Test 6: test_matmul(32x32x32) [SQUARE]
+Status: PASSED
+No difference detected
+
+Test 7: test_matmul(128x128x128) [SQUARE]
+Status: PASSED
+No difference detected
+
+Test 8: test_matmul(256x256x256) [SQUARE]
+Status: PASSED
+No difference detected
+
+Test 9: test_addmm2(129x61x56)
+Status: FAILED
+Max diff: 20.22
+Pattern: Last rows have zeros/mismatches
+
+Test 10: test_addmm(516x244x224)
+Status: FAILED
+Max diff: 60.61
+Pattern: Scattered differences across large matrix
+
+KEY OBSERVATIONS:
+=================
+
+1. SQUARE MATRICES PASS: All N×N cases (32x32x32, 128x128x128, 256x256x256) pass perfectly
+   - This indicates the core systolic array computation is correct for square tiling
+
+2. RECTANGULAR MATRICES FAIL: All M≠N cases fail with significant errors
+   - Errors range from ~19 to ~78 in absolute difference
+   - Errors are NOT uniformly distributed (some elements correct, some wrong)
+
+3. PATTERN ANALYSIS:
+   - Test 1 (128x256x256): First/last columns correct, middle WRONG
+     This is CLASSIC N-split buffer collision or iteration offset bug
+   
+   - Test 2,5,9 (smaller matrices): Last rows are ZEROS instead of correct values
+     This suggests output buffer not being accumulated properly across N-splits
+   
+   - Test 3,4 (128x256x512): Scattered errors across matrix
+     Suggests partial buffer overwrite or iteration ordering issue
+
+4. ROOT CAUSE ASSESSMENT:
+   The buffer naming fix (W_0_spad, W_1_spad, etc.) was NECESSARY but NOT SUFFICIENT
+   
+   Additional issues remain:
+   a) N-split iteration coordination in MLIR codegen
+   b) OMEM buffer management across multiple N-tile iterations
+   c) Possible accumulation/reduction semantics for split iterations
+   d) DMA addressing for weight matrices in N-split scenarios
+
+5. SQUARE MATRIX SUCCESS indicates:
+   - Tile descriptor generation is correct
+   - DRAM stride handling is correct for single iterations
+   - Systolic array computation is correct
+   - FAILURE is specific to MULTI-ITERATION N-SPLIT handling
+
+CONCLUSION: 
+===========
+The buffer collision fix (commit 66d0acd) was applied correctly, but rectangular matmul
+still fails. The root cause is NOT just buffer naming collisions - there are deeper issues
+in how N-split iterations coordinate their DMA transfers and accumulations.
+
+NEXT STEPS NEEDED:
+- Investigate MLIR code generation for N-split DMA loop structure
+- Verify OMEM accumulation semantics across N-iterations
+- Check weight tile addressing in split iteration loops
+- Possibly need fixes in tile iteration ordering or buffer synchronization
+
+STATUS: VALIDATION FAILED - Root cause is incomplete

@@ -1,0 +1,11 @@
+Test#,TestName,Function,M,N,K,Status,MaxDiff,MaxRelDiff,MeanAbsDiff,Notes
+1,128x256x256,test_matmul,128,256,256,FAILED,78.04,3914.46,2.19,"First/last cols correct, middle wrong (N-split bug)"
+2,128x63x56,test_matmul,128,63,56,FAILED,19.89,1.00,0.08,"Last row zeros, incomplete output"
+3,128x256x512,test_addmm,128,256,512,FAILED,69.44,2398.28,0.69,"Scattered errors across matrix"
+4,128x256x512,test_addmm,128,256,512,FAILED,69.44,2398.28,0.69,"Duplicate test, same results"
+5,129x61x56,test_addmm,129,61,56,FAILED,20.22,6.81,0.29,"Last rows zeros, incomplete output"
+6,32x32x32,test_matmul,32,32,32,PASSED,0.00,0.00,0.00,"Square matrix - working correctly"
+7,128x128x128,test_matmul,128,128,128,PASSED,0.00,0.00,0.00,"Square matrix - working correctly"
+8,256x256x256,test_matmul,256,256,256,PASSED,0.00,0.00,0.00,"Square matrix - working correctly"
+9,129x61x56,test_addmm2,129,61,56,FAILED,20.22,1.00,0.29,"Last rows zeros, incomplete output"
+10,516x244x224,test_addmm,516,244,224,FAILED,60.61,4516.09,0.31,"Scattered errors in large matrix"

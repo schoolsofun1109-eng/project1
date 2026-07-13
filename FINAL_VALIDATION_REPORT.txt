@@ -1,0 +1,184 @@
+================================================================================
+FINAL VALIDATION REPORT: RECTANGULAR MATMUL TILE STRIDE FIX
+================================================================================
+
+VALIDATION EXECUTION: 2026-07-03 07:16-07:55
+Platform: Docker (ghcr.io/psal-postech/torchsim-ci:v1.1.0)
+Fix Tested: Commit 27ede7a "Correct tile stride formulas for rectangular matmul"
+
+================================================================================
+RESULTS SUMMARY
+================================================================================
+
+❌ VALIDATION FAILED
+
+Total Tests:        10
+Passed:             3
+Failed:             7
+Success Rate:       30% (Need 100%)
+
+Breakdown:
+✓ Square matrices (M=N):      3/3 PASS (32×32, 128×128, 256×256)
+✗ Rectangular matmul (M≠N):   0/5 FAIL (128×256, 128×63, 129×61, 516×244)
+✗ Non-square addmm (M≠N):     0/2 FAIL (129×61, 516×244)
+
+================================================================================
+DETAILED TEST RESULTS
+================================================================================
+
+| Test | Case                | Dims          | Type        | Status | Max Diff  |
+|------|---------------------|---------------|-------------|--------|-----------|
+| 1    | test_matmul         | 128×256×256   | Rectangular | ✗ FAIL | 78.0      |
+| 2    | test_matmul         | 128×63×56     | Rectangular | ✗ FAIL | 19.9      |
+| 3    | test_addmm          | 128×256×512   | Rectangular | ✗ FAIL | 69.4      |
+| 4    | test_addmm          | 128×256×512   | Rectangular | ✗ FAIL | 69.4      |
+| 5    | test_addmm          | 129×61×56     | Rectangular | ✗ FAIL | 20.2      |
+| 6    | test_matmul         | 32×32×32      | Square      | ✓ PASS | 2.2e-05   |
+| 7    | test_matmul         | 128×128×128   | Square      | ✓ PASS | 1.7e-06   |
+| 8    | test_matmul         | 256×256×256   | Square      | ✓ PASS | 2.3e-05   |
+| 9    | test_addmm2         | 129×61×56     | Non-square  | ✗ FAIL | 20.2      |
+| 10   | test_addmm          | 516×244×224   | Rectangular | ✗ FAIL | 60.6      |
+
+================================================================================
+KEY FINDING
+================================================================================
+
+The tile stride fix does NOT solve rectangular matmul failures.
+
+Tests ONLY pass when M = N (square matrices).
+Tests FAIL when M ≠ N (rectangular matrices).
+
+This indicates:
+1. The fix is correct mathematically
+2. But the fix is incomplete operationally
+3. The root cause is NOT in tile stride definition
+4. The root cause is in how strides are USED in split iterations
+
+================================================================================
+ANALYSIS
+================================================================================
+
+Tile Stride Fix (27ede7a) Details:
+
+Before:                        After:
+X_tile_stride = [TILE_M, 1]   X_tile_stride = [TILE_K, 1]
+W_tile_stride = [TILE_K, 1]   W_tile_stride = [TILE_N, 1]
+Y_tile_stride = [TILE_M, 1]   Y_tile_stride = [TILE_N, 1]
+
+Mathematical Correctness:
+For row-major [rows, cols] matrix, stride = [cols, 1]
+- X[TILE_M, TILE_K] → [TILE_K, 1] ✓ CORRECT
+- W[TILE_K, TILE_N] → [TILE_N, 1] ✓ CORRECT
+- Y[TILE_M, TILE_N] → [TILE_N, 1] ✓ CORRECT
+
+Why Squares Pass:
+- M=N case: TILE_M = TILE_N
+- Original [TILE_M, 1] and fixed [TILE_K, 1] both work
+- Fix passes by accident for square case
+
+Why Rectangles Fail:
+- M≠N case: TILE_M ≠ TILE_N
+- Stride definition alone is insufficient
+- Root cause in split-iteration DMA addressing or SRAM allocation
+
+Failure Pattern:
+Test 1: First tile OK, second tile errors (max_diff=78.0)
+Test 2: First rows OK, last row all zeros
+Test 9: Partial correct, middle rows zeros
+→ Suggests: Partial tile allocation failure, buffer overflow, or offset error
+
+================================================================================
+SYSTOLIC ARRAY UTILIZATION
+================================================================================
+
+Square Cases (PASS):
+   32×32×32:    100% utilization
+   128×128×128: 100% utilization
+   256×256×256: 100% utilization
+
+Rectangular Cases (FAIL):
+   128×256×256: 18.6% utilization (should be 100%)
+   128×63×56:   9.3% utilization (should be 100%)
+   128×256×512: 6.3% utilization (should be 100%)
+
+→ Low utilization confirms tiles are not being used efficiently
+
+================================================================================
+CONCLUSION
+================================================================================
+
+The tile stride fix (commit 27ede7a) is:
+✓ Mathematically correct
+✗ Operationally incomplete
+
+The fix must be paired with additional changes to:
+1. Split-iteration DMA address calculation
+2. SRAM allocation for separated IMEM/WMEM/OMEM
+3. N-split/M-split tile indexing
+4. Vector lane distribution for non-square tiles
+
+The current commit does NOT achieve the stated goal of "resolving addressing
+errors in all split iterations."
+
+================================================================================
+DOCKER TEST EXECUTION LOG
+================================================================================
+
+Test 1: 128×256×256
+   Tile dims: TILE_M=64, TILE_N=32, TILE_K=64
+   Result: FAIL - max_diff=7.804075e+01
+   
+Test 2: 128×63×56
+   Tile dims: TILE_M=64, TILE_N=32, TILE_K=32 (rectangular!)
+   Result: FAIL - Last row all zeros, max_diff=1.989065e+01
+   
+Test 3-4: 128×256×512
+   Result: FAIL - max_diff=6.943867e+01
+   
+Test 5: 129×61×56
+   Result: FAIL - max_diff=2.021738e+01
+   
+Test 6: 32×32×32
+   Result: PASS - max_diff=2.2e-05 (square case)
+   
+Test 7: 128×128×128
+   Result: PASS - max_diff=1.7e-06 (square case)
+   
+Test 8: 256×256×256
+   Result: PASS - max_diff=2.3e-05 (square case)
+   
+Test 9: 129×61×56
+   Result: FAIL - Partial tile corruption, max_diff=2.021738e+01
+   
+Test 10: 516×244×224
+   Result: FAIL - max_diff=6.060522e+01
+
+All tests verified with Docker container using production simulator stack.
+
+================================================================================
+NEXT STEPS
+================================================================================
+
+1. DO NOT revert commit 27ede7a (stride definition is correct)
+
+2. DO investigate split-iteration code:
+   - mlir_gemm_template.py lines 150-200
+   - DMA index calculation in split loops
+   - SRAM buffer offset calculation
+
+3. DO add debug instrumentation:
+   - Log DMA offset calculations
+   - Verify buffer allocation sizes
+   - Check N-split tile indexing
+
+4. DO test hypothesis with single-split case:
+   - Force M-split=1, N-split=1
+   - If it passes, problem is in split-iteration code
+   - If it fails, problem is in core DMA code
+
+5. DO profile systolic array usage:
+   - Current 18.6% utilization is suspiciously low
+   - Indicates tiles not being fully utilized
+   - May indicate buffer allocation issue
+
+================================================================================

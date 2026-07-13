@@ -1,0 +1,127 @@
+================================================================================
+RECTANGULAR MATMUL VALIDATION TEST REPORT
+Tile Stride Fix Validation (commit 27ede7a)
+================================================================================
+
+EXECUTIVE SUMMARY
+================================================================================
+Status: ❌ VALIDATION FAILED - 3/10 PASSING (should be 10/10)
+
+Fix Applied:
+- Commit: 27ede7a "Fix: Correct tile stride formulas for rectangular matmul"
+- Changes: X_tile_stride=[TILE_K,1], W_tile_stride=[TILE_N,1], Y_tile_stride=[TILE_N,1]
+- Expected Result: All rectangular matmul tests should PASS
+- Actual Result: Tests 1-5 and 9-10 FAIL. Tests 6-8 (square only) PASS.
+
+DETAILED RESULTS
+================================================================================
+
+Rectangular Tests (Expected: PASS, Actual: 0/5 PASS)
+   Test 1: test_matmul(128×256×256)         ✗ FAIL (max_diff=7.8e+01)
+   Test 2: test_matmul(128×63×56)           ✗ FAIL (max_diff=1.99e+01)
+   Test 3: test_addmm(128×256×512)          ✗ FAIL (max_diff=6.94e+01)
+   Test 4: test_addmm(128×256×512)          ✗ FAIL (max_diff=6.94e+01)
+   Test 5: test_addmm(129×61×56)            ✗ FAIL (max_diff=2.02e+01)
+
+Square Tests (Expected: PASS, Actual: 3/3 PASS)
+   Test 6: test_matmul(32×32×32)            ✓ PASS (max_diff=2.2e-05)
+   Test 7: test_matmul(128×128×128)         ✓ PASS (max_diff=1.7e-06)
+   Test 8: test_matmul(256×256×256)         ✓ PASS (max_diff=2.3e-05)
+
+Non-Square/AddMM Tests (Expected: PASS, Actual: 0/2 PASS)
+   Test 9: test_addmm2(129×61×56)           ✗ FAIL (max_diff=2.02e+01)
+   Test 10: test_addmm(516×244×224)         ✗ FAIL (max_diff=6.06e+01)
+
+PASS/FAIL BREAKDOWN
+================================================================================
+Total Tests:     10
+Passed:          3 (Tests 6, 7, 8 - all square M=N)
+Failed:          7 (Tests 1-5, 9-10 - all rectangular M≠N or addmm)
+
+Success Rate:    30% (Need 100%)
+
+ROOT CAUSE ANALYSIS
+================================================================================
+
+Key Observation: Tests ONLY pass when M = N (square matrices)
+
+Tile Stride Fix Analysis:
+   The fix updates stride formulas from:
+   - X: [TILE_M, 1] → [TILE_K, 1]  (mathematically correct)
+   - W: [TILE_K, 1] → [TILE_N, 1]  (mathematically correct)
+   - Y: [TILE_M, 1] → [TILE_N, 1]  (mathematically correct)
+
+   Why it passes for square matrices:
+   - When M = N: TILE_M = TILE_N
+   - So [TILE_K, 1] and [TILE_M, 1] give same result
+   - Fix works by accident for square case
+
+   Why it fails for rectangular:
+   - When M ≠ N: TILE_M ≠ TILE_N
+   - The stride fix is necessary but NOT sufficient
+   - Root cause is elsewhere in the pipeline
+
+Error Pattern in Rectangular Tests:
+   - Some tiles compute correctly
+   - Some tiles have all zeros
+   - Some tiles have completely wrong values
+   - Indicates: SRAM buffer allocation or DMA addressing issue
+   - NOT: tile stride definition issue
+
+FAILURE SIGNATURES
+================================================================================
+
+Test 1 (128×256×256):
+   - First tile matches partially
+   - Second tile has large errors (max_diff=78.0)
+   - TILE_M=64, TILE_N=32, TILE_K=64 (rectangular!)
+
+Test 2 (128×63×56):
+   - Last row: all zeros (complete tile failure)
+   - First rows: correct match
+   - Indicates: N-split tile allocation failure
+
+Test 9 (129×61×56):
+   - Similar pattern: partial tiles match, some rows all zeros
+   - TILE_M and TILE_N likely different
+
+CONCLUSION
+================================================================================
+
+The tile stride fix (27ede7a) is CORRECT but INCOMPLETE.
+
+The fix alone does NOT solve rectangular matmul failures because:
+
+1. Tile stride definition [TILE_K,1], [TILE_N,1] is mathematically correct
+2. But the fix works for square matrices M=N only (coincidence)
+3. The real issue is NOT in the stride formula itself
+4. The real issue is in how strides are USED in:
+   - DMA operation address calculation
+   - SRAM buffer allocation for split iterations
+   - N-split/M-split tile distribution
+   - Vector lane mapping for non-square tiles
+
+Next Steps:
+   1. Revert commit 27ede7a (it's correct but labeled wrong)
+   2. Audit split iteration DMA code (mlir_gemm_template.py lines 150-200)
+   3. Check SRAM allocation for separated IMEM/WMEM/OMEM
+   4. Verify N-split tile indexing for rectangular cases
+   5. Test with stride fix PLUS split iteration fixes
+
+RUNTIME STATISTICS
+================================================================================
+
+Passing Tests (Square):
+   Test 6: M=N=K=32      → 256 cycles, 100% util, 128 GB/s
+   Test 7: M=N=K=128     → 2.8k cycles, 100% util, 128 GB/s
+   Test 8: M=N=K=256     → 10.2k cycles, 100% util, 128 GB/s
+
+Failing Tests (Rectangular):
+   Test 1: M=128, N=256, K=256 → 10.5k cycles, 18.6% util, 174.9 GB/s
+   Test 2: M=128, N=63, K=56   → 1.4k cycles, 9.3% util, 93.8 GB/s
+   Test 3: M=128, N=512, K=256 → 20k cycles, 6.3% util, 183 GB/s
+
+Note: Utilization is LOW for rectangular (18.6% vs 100%), suggesting tiles
+      are not being used efficiently or allocated correctly.
+
+================================================================================
