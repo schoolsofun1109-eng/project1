@@ -8,6 +8,8 @@ class SystolicArray(MinorFU):
     systolicArrayWidth = 128
     systolicArrayHeight = 128
     systolicArrayDepth = 1
+    # 0 = weight-stationary (legacy), 1 = output-stationary 3D.
+    systolicDataflow = 0
 
 class SparseAccelerator(MinorFU):
     unitType = "SparseAccelerator"

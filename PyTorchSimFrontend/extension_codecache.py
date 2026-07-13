@@ -1,6 +1,5 @@
 import os
 import re
-import math
 import shlex
 import subprocess
 import torch
@@ -9,85 +8,11 @@ from PyTorchSimFrontend import extension_config
 from torch._inductor.codecache import get_hash, write
 from torch._inductor.async_compile import AsyncCompile
 from AsmParser.tog_generator import tog_generator
-from AsmParser.onnx_utility import compute_node
 from PyTorchSimFrontend.mlir.mlir_caller_codegen import MLIRKernelCallerCodeGen
 from Simulator.simulator import FunctionalSimulator, CycleSimulator, TOGSimulator
 
 # Configure logger for extension_codecache module (WARNING level by default)
 logger = extension_config.setup_logger()
-
-def _scale_cycles_for_3d_pe(cycle_list, compute_types, k_tile, plane_size):
-    """Post-correct gem5-measured cycles for a rectangular/3D (Sm x Sn x Sk) PE array.
-
-    gem5 always measures a SQUARE array of side Sn = plane_size (= vpu_num_lanes),
-    with the MLIR tiling matched to that same square. For that square measurement
-    the K reduction takes ceil(K/Sn) passes. A target array of height Sm and depth
-    Sk reduces Sm*Sk of K per pass -> ceil(K/(Sm*Sk)) passes. Since the per-tile
-    cycle is K-independent (M-streaming + fill/drain; verified empirically) and the
-    WIDTH already equals Sn (so N-tiling and width fill/drain are measured exactly),
-    only the K-pass count needs correcting:
-
-        ratio = ceil(K/(Sm*Sk)) / ceil(K/Sn)
-        c_3d  = round(c * ratio)
-
-    Cases:
-      * Sm == Sn and Sk == 1 (square 2D): ratio = 1 -> bit-exact, no change.
-      * Sm == Sn, Sk > 1 (n x n x k depth): ratio = ceil(K/(Sn*Sk))/ceil(K/Sn).
-      * Sm != Sn (rectangular height): ratio = ceil(K/(Sm*Sk))/ceil(K/Sn).
-      * K <= Sm*Sk (single pass): ratio = 1 -> no speedup (nothing to parallelize).
-
-    Only GEMM/preload nodes (compute_type > 0) are corrected; vector nodes
-    (compute_type == 0, e.g. softmax / RMSNorm / RoPE) have no K reduction.
-
-    Note (approximation): the K-direction fill/drain uses the measured Sn rather
-    than the target Sm, and M-tiling is left at the measured square. These are
-    second-order vs. the K-pass count. Faithful rectangular tiling would need the
-    (prebuilt, source-unavailable) MLIR pass + gem5 rebuild.
-    """
-    Sk = extension_config.systolic_array_size_k or 1
-    Sn = plane_size                                        # gem5 array width
-    Sm = extension_config.systolic_array_height or Sn      # array fill height (one layer)
-    real = extension_config.systolic_array_real_rect
-
-    # Real mode: gem5 + the MLIR passes model the array directly and with no
-    # post-scale. The 3D depth Sk is handled by DECOUPLING the two knobs --
-    # the MLIR K-tiling divisor is Sm*Sk (K reduced per pass) while gem5's fill
-    # height stays Sm (--vlane-height) so saSize = Sm+Sn-1. Both the pass count
-    # and the fill are therefore really simulated, so return the cycles as-is.
-    if real:
-        return cycle_list
-
-    # ---- Legacy post-scale approximation (real mode off) ----
-    # gem5 measured a square Sn x Sn array (K tiled by Sn). The target array of
-    # height Sm and depth Sk reduces (Sm*Sk) of K per pass; rescale by the
-    # pass-count ratio. Kept for backward compatibility with old configs.
-    measured_height = Sn
-    if Sk <= 1 and Sm == Sn:
-        return cycle_list                          # square 2D: identical to before
-
-    if len(cycle_list) != len(compute_types):
-        # Should not happen (one cycle per compute node); stay safe rather than corrupt.
-        logger.warning("[3D-PE] cycle/compute-node count mismatch (%d vs %d); skipping correction",
-                       len(cycle_list), len(compute_types))
-        return cycle_list
-    if k_tile and k_tile > 0:
-        passes_measured = math.ceil(k_tile / measured_height)
-        passes_target = math.ceil(k_tile / (Sm * Sk))      # 3D: Sm height x Sk depth
-        ratio = passes_target / passes_measured
-    else:
-        ratio = None
-    scaled = []
-    for c, ctype in zip(cycle_list, compute_types):
-        if ctype is None or ctype <= 0:
-            scaled.append(c)                        # vector node: no K reduction, keep as-is
-        elif ratio is None:
-            scaled.append(max(1, math.ceil(c / Sk)))  # K tile unknown: conservative
-        else:
-            scaled.append(max(1, round(c * ratio)))   # GEMM: corrected K-pass count
-    logger.info("[3D-PE] real=%s Sm=%d Sn=%d Sk=%d K_t=%s base_h=%d pass_ratio=%s: cycles %s -> %s (GEMM only)",
-                real, Sm, Sn, Sk, k_tile, measured_height,
-                None if ratio is None else round(ratio, 3), cycle_list, scaled)
-    return scaled
 
 LOCK_TIMEOUT = 600
 
@@ -113,24 +38,44 @@ def dump_metadata(args, arg_attributes, path):
     return
 
 def _rect_height_opt(vectorlane_size):
-    """Extra ``systolic-array-height=<Sm*Sk>`` token for the pytorchsim-to-vcix pass.
+    """Extra ``systolic-array-k-depth=<Sm*Sk>`` token for the pytorchsim-to-vcix pass.
 
-    The depth Sk's dominant timing effect is the reduced PASS COUNT: a 3D array
-    of height Sm and depth Sk reduces Sm*Sk of K per pass, so K is tiled by
-    Sm*Sk (passes = K/(Sm*Sk)). This is expressed through the MLIR instruction
-    stream (fewer vpush/compute), which is what actually drives gem5's cycles.
-    gem5 additionally receives Sm (--vlane-height, fill) and Sk (--vlane-depth,
-    adder-tree latency) so it reports the true 3D geometry (WxHxD). Empty when
-    Sm*Sk == Sn (== the default square tiling) or real mode is off.
+    Sm*Sk is the array's K capacity, not a fudge factor. This array is
+    weight-stationary, so its stationary tile is K x N and its two physical
+    axes are height = K and width = N; M is streamed through over time and is
+    not a physical axis at all. pe_M/systolic_array_height is therefore the K
+    axis despite its name, and Sk (pe_P) adds a per-PE adder tree that reduces
+    Sk more K values per cycle. Both feed K, so one array pass consumes
+    height * Sk = Sm * Sk values of K -- which is exactly the granularity K
+    must be tiled by.
+
+    Do not "correct" this to Sk alone. That was tried; the only functional-mode
+    config it appeared to validate against (systolic_ws_rect_sk2_func:
+    Sm=64,Sk=2) has Sm*Sk == Sn == 128, which trips the early return below and
+    emits no flag at all -- i.e. that test never exercised a 3D path in the
+    first place and proves nothing either way. See extension_config.py for the
+    gem5 / Spike / MLIR evidence that height is the K axis.
     """
     if not extension_config.systolic_array_real_rect:
         return ""
     sm = extension_config.systolic_array_height or vectorlane_size
     sk = extension_config.systolic_array_size_k or 1
+
+    if extension_config.systolic_dataflow == "os":
+        # Output-stationary 3D: the array face is Sm x Sn and each PE owns one
+        # C[m][n] accumulator, so M is tiled by Sm and K by Sk alone (Sk is the
+        # per-PE adder-tree depth). See rect_array_work/OS_3D_CONTRACT.md.
+        return (f" systolic-dataflow=os"
+                f" systolic-array-m-height={sm}"
+                f" systolic-array-k-depth={sk}")
+
+    # Weight-stationary (legacy): the array face is K x N, so the height IS the
+    # K axis and one array pass consumes height * Sk values of K. That product,
+    # not Sk, is the K-tiling granularity.
     k_per_pass = sm * sk
     if k_per_pass == vectorlane_size:
         return ""
-    return f" systolic-array-height={k_per_pass}"
+    return f" systolic-array-k-depth={k_per_pass}"
 
 def mlir_compile_command(filename, vectorlane_size, vlen=256):
     return [re.sub(r"[ \n]+", " ",
@@ -346,11 +291,6 @@ class MLIRCodeCache:
             cyclesim = CycleSimulator()
             cycle_list = cyclesim.compile_and_simulate(os.path.join(write_path, cycle_binary_name), vectorlane_size, silent_mode=silent_mode)
 
-            # 3D PE array: K tile length for the depth-Sk scaling. The scaling itself
-            # is applied below, AFTER the TOG is loaded, so it can see compute-node
-            # types and skip vector nodes. loop_size = [TOG_latency, TILE_N, TILE_K].
-            k_tile = kwargs['loop_size'][-1] if kwargs.get('loop_size') else None
-
             # Create TOG
             w_offset, x_offset = vectorlane_size, vectorlane_size
             if kwargs['loop_size'] is not None and kwargs['loop_size'][-3] < vectorlane_size:
@@ -360,13 +300,6 @@ class MLIRCodeCache:
             w_offset = 0 # max(w_offset - x_offset, 0)
             tile_graph_generator = tog_generator(origins)
             tile_graph_generator.load_file(raw_tog_path)
-            # Now that compute-node types are known, apply the 3D (Sk) scaling to GEMM
-            # nodes only (compute_type > 0), leaving vector nodes untouched. The node
-            # order here matches the cycle_list pop order in generate_tile_graph.
-            compute_types = [n.torchsim_compute_type
-                             for n in tile_graph_generator.node_dict.values()
-                             if isinstance(n, compute_node)]
-            cycle_list = _scale_cycles_for_3d_pe(cycle_list, compute_types, k_tile, vectorlane_size)
             tile_graph_generator.generate_tile_graph(
                 tog_path,
                 cycle_list=cycle_list,

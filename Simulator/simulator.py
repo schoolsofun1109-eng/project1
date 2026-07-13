@@ -140,11 +140,19 @@ class FunctionalSimulator():
             f"--scratchpad-base-vaddr={spad_info['spad_vaddr']} " + \
             f"--scratchpad-size={spad_info['spad_size']} "
         vectorlane_option = f"--vectorlane-size={vectorlane_size}"
+
+        # Output-stationary 3D mode: thread Sm and Sk to Spike
+        sa_options = ""
+        if extension_config.systolic_dataflow == "os":
+            sm = extension_config.systolic_array_height or vectorlane_size
+            sk = extension_config.systolic_array_size_k or 1
+            sa_options = f"--sa-dataflow=os --sa-height={sm} --sa-depth={sk}"
+
         kernel_address = f"--kernel-addr={kernel_start_addr}:{kernel_end_addr}"
         base_path= f"--base-path={runtime_path}"
         os.makedirs(os.path.join(runtime_path, "indirect_access"), exist_ok=True)
         os.makedirs(os.path.join(runtime_path, "dma_access"), exist_ok=True)
-        run = f'spike --isa rv64gcv_zfh --varch=vlen:256,elen:64 {vectorlane_option} {spad_option} {kernel_address} {base_path} /workspace/riscv-pk/build/pk {target_binary} {file_path_str}'
+        run = f'spike --isa rv64gcv_zfh --varch=vlen:256,elen:64 {vectorlane_option} {sa_options} {spad_option} {kernel_address} {base_path} /workspace/riscv-pk/build/pk {target_binary} {file_path_str}'
         if not silent_mode:
             logger.debug(f"[Spike] cmd> {run}")
             logger.info("[Spike] Running Spike simulator")
@@ -217,6 +225,11 @@ class CycleSimulator():
                 gem5_cmd += ["--vlane-height", str(sm)]
             if sk > 1:
                 gem5_cmd += ["--vlane-depth", str(sk)]
+            # Output-stationary changes what the array does per cycle (both
+            # operands stream, outputs drain only after the K loop), so gem5
+            # needs the dataflow too -- geometry alone is not enough.
+            if extension_config.systolic_dataflow == "os":
+                gem5_cmd += ["--dataflow", "os"]
 
         if not silent_mode:
             logger.debug(f"[Gem5] cmd> {' '.join(gem5_cmd)}")

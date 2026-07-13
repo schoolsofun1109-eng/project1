@@ -53,12 +53,38 @@ def __getattr__(name):
         config_yaml = yaml.safe_load(f)
 
     # Hardware info config.
-    # Config field names (intuitive):
-    #   pe_M  = PE array token dim (M)      [internal: systolic_array_height / Sm]
-    #   pe_N  = PE array output-channel (N) [internal: vpu_num_lanes / Sn = array width]
-    #   pe_P  = PE array input-channel (P)  [internal: systolic_array_size_k / Sk = depth]
+    #
+    # WHAT THE PE ARRAY ACTUALLY IS (read this before touching pe_M):
+    # This is a weight-stationary systolic array. The stationary weight tile is
+    # K x N, so the array's two physical axes are HEIGHT = K (the reduction
+    # axis) and WIDTH = N (the output-channel axis). M is NOT a physical axis:
+    # activations are streamed through the array over time, M rows at a time.
+    # Three independent places agree on this:
+    #   - gem5 func_unit.hh: saSize = width + height - 1, the classic 2D
+    #     systolic fill/drain (rows + cols - 1) -- height is a physical axis.
+    #   - Spike systolic_array.cc: one weight deque PER LANE (per output column
+    #     n), each holding that column's K weights -- so column depth == K.
+    #   - MLIR pass: SYSTOLIC_K_DEPTH defaults to SYSTOLIC_SIZE (the square
+    #     array's height), i.e. height is what K is tiled by.
+    #
+    # Config field names:
+    #   pe_M  = array HEIGHT. Despite the name this is the K (reduction) axis,
+    #           NOT the token/M axis.        [internal: systolic_array_height]
+    #   pe_N  = array WIDTH = output-channel N [internal: vpu_num_lanes / Sn]
+    #   pe_P  = 3D depth Sk: extra K values each PE reduces per cycle, via a
+    #           per-PE multiplier + adder tree [internal: systolic_array_size_k]
     #   simd_K   = 1D SIMD lane count
     #   simd_bit = 1D SIMD per-lane bit width [internal: vpu_vector_length_bits]
+    #
+    # Both pe_M and pe_P therefore feed the K axis: K reduced per array pass
+    # = pe_M * pe_P (height x depth). That is why the MLIR K-tiling divisor is
+    # Sm*Sk -- it is not a hack or an unexplained leak, it is the K capacity of
+    # the array.
+    #
+    # NOTE: a "Sm x Sn x Sk = M x N x K" array (2D face = M x N, depth = K) is a
+    # DIFFERENT machine -- that is output-stationary, and would require changing
+    # gem5's saSize formula, the MLIR dataflow, and Spike. Not what is built here.
+    #
     # Old field names are still accepted as fallback.
     if name == "vpu_num_lanes":                          # PE array width Sn (= pe_N)
         return config_yaml.get("pe_N", config_yaml.get("vpu_num_lanes"))
@@ -111,31 +137,54 @@ def __getattr__(name):
     if name == "pytorchsim_timing_mode":
         return config_yaml['pytorchsim_timing_mode']
 
-    # 3D PE array: depth of the K-reduction axis (Sk).
-    # Sk=1 => classic 2D systolic array (identical cycles to before).
-    # Sk>1 => the K reduction is parallelized across Sk PEs, so the
-    # reduction-dominated part of each GEMM tile's measured cycle shrinks ~1/Sk.
-    if name == "systolic_array_size_k":                  # PE array depth P (= pe_P)
+    # Dataflow. This decides what the array's axes MEAN, so read it before
+    # interpreting pe_M below. See rect_array_work/OS_3D_CONTRACT.md.
+    #   "ws" (default, legacy): weight-stationary. Stationary tile is K x N, so
+    #     the array face is height=K by width=N and M is streamed over time.
+    #     pe_M is therefore the K axis, and K per array pass = pe_M * pe_P.
+    #   "os": output-stationary 3D. Array face is height=M by width=N, each PE
+    #     owns the accumulator for one C[m][n], and pe_P=Sk is the depth (K
+    #     values reduced per PE per cycle). Both operands stream; K is tiled by
+    #     Sk alone. Here pe_M finally means what its name says.
+    if name == "systolic_dataflow":
+        df = str(config_yaml.get("dataflow", "ws")).lower()
+        assert df in ("ws", "os"), f"Invalid dataflow {df!r}: expected 'ws' or 'os'"
+        return df
+
+    # 3D depth Sk (= pe_P): how many K values each PE reduces per cycle, via a
+    # per-PE multiplier + adder tree. Costs ceil(log2(Sk)) cycles of adder-tree
+    # latency in gem5 (func_unit.hh). In "ws" it multiplies the array's K
+    # capacity on top of the height; in "os" it IS the K tiling granularity.
+    if name == "systolic_array_size_k":                  # 3D depth Sk (= pe_P)
         return config_yaml.get("pe_P", config_yaml.get("systolic_array_size_k", 1))
 
-    # 3D PE array: array HEIGHT Sm (token dim M). Defaults to the width N
-    # (square) when not given.
-    if name == "systolic_array_height":                  # PE array token M (= pe_M)
+    # Array HEIGHT (= pe_M). In "ws" this is the K/reduction axis despite its
+    # name; in "os" it is the M/token axis. Defaults to the width N (square
+    # array) when not given.
+    if name == "systolic_array_height":                  # array height
         _N = config_yaml.get("pe_N", config_yaml.get("vpu_num_lanes"))
         return config_yaml.get("pe_M", config_yaml.get("systolic_array_height", _N))
 
-    # Rectangular PE array modelling mode.
-    #   False (default): gem5 measures a SQUARE array; systolic_array_height is
-    #     applied as a post-hoc cycle approximation (_scale_cycles_for_3d_pe).
-    #   True: the height Sm is threaded into the MLIR passes (K tiled by Sm) and
-    #     into gem5 (--vlane-height, saSize = Sm+Sn-1) so the rectangular array is
-    #     simulated directly -- no approximation. Requires a rebuilt mlir-opt that
-    #     understands `systolic-array-height`.
+    # Rectangular/3D PE array modelling mode.
+    #   False: only valid when the array is actually square (pe_M == pe_N) and
+    #     has no depth (pe_P == 1) -- gem5 measures that square array directly,
+    #     no correction needed.
+    #   True (auto-enabled whenever pe_M != pe_N or pe_P > 1): Sm*Sk is
+    #     threaded into the MLIR passes (K tiled by Sm*Sk, see
+    #     systolic_array_size_k comment above) and Sk into gem5
+    #     (--vlane-depth, Sk adder-tree layers) so the rectangular/3D array is
+    #     simulated directly. Requires mlir-opt built from
+    #     patches/llvm-project.patch and gem5 built from patches/gem5.patch
+    #     (mount both into the docker container -- see
+    #     rect_array_work_scripts/run_cyc.sh's MLIROPT/GEM5 env vars).
     if name == "systolic_array_real_rect":
         # Explicit override wins; otherwise auto-enable whenever the PE array
-        # geometry is non-square (pe_M != pe_N) or has depth (pe_P > 1).
+        # geometry is non-square (pe_M != pe_N), has depth (pe_P > 1), or runs
+        # the output-stationary dataflow (which always needs the real path).
         if "systolic_array_real_rect" in config_yaml:
             return bool(config_yaml["systolic_array_real_rect"])
+        if str(config_yaml.get("dataflow", "ws")).lower() == "os":
+            return True
         _N = config_yaml.get("pe_N", config_yaml.get("vpu_num_lanes"))
         _M = config_yaml.get("pe_M", config_yaml.get("systolic_array_height", _N))
         _P = config_yaml.get("pe_P", config_yaml.get("systolic_array_size_k", 1))

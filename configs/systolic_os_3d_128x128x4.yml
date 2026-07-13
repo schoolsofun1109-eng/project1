@@ -3,10 +3,15 @@ core_freq_mhz: 940
 core_stats_print_period_cycles: 10000
 num_systolic_array_per_core: 1
 
-# ===== PE Array:  M(token) x N(output-ch) x P(input-ch) =====
-pe_M: 64
-pe_N: 128
-pe_P: 1
+# ===== 3D OUTPUT-STATIONARY PE array =====
+# Array face is M x N: each PE(m,n) owns the accumulator for one C[m][n].
+# pe_P = Sk is the depth -- K values reduced per PE per cycle via an adder tree.
+# Both operands stream; K is tiled by Sk alone.
+# See rect_array_work/OS_3D_CONTRACT.md.
+dataflow: os
+pe_M: 128     # Sm = M / token   (array height)
+pe_N: 128     # Sn = N / out-ch  (array width)
+pe_P: 4       # Sk = K depth
 
 # ===== 1D SIMD =====
 simd_K: 128
@@ -23,17 +28,15 @@ icnt_latency_cycles: 10
 icnt_freq_mhz: 940
 icnt_injection_ports_per_core: 16
 
-# IMEM (Input Memory) - 128KB
+# IMEM / WMEM / OMEM - 128KB each
 imem_num_banks: 8
 imem_sram_bitwidth: 256
 imem_sram_depth: 512
 
-# WMEM (Weight Memory) - 128KB
 wmem_num_banks: 8
 wmem_sram_bitwidth: 256
 wmem_sram_depth: 512
 
-# OMEM (Output Memory) - 128KB
 omem_num_banks: 8
 omem_sram_bitwidth: 256
 omem_sram_depth: 512
@@ -46,6 +49,3 @@ codegen_autotune_max_retry: 5
 codegen_autotune_template_topk: 5
 
 codegen_compiler_optimization: all
-
-# --- Rectangular via OLD post-hoc approximation ---
-systolic_array_real_rect: false

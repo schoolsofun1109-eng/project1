@@ -23,6 +23,10 @@ parser.add_argument("--vlane", type=int, default=128)
 parser.add_argument("--vlane-height", type=int, default=0)
 # 3D PE array: depth Sk (parallel K-reduction layers). 1 = 2D (no depth).
 parser.add_argument("--vlane-depth", type=int, default=1)
+# Dataflow. "ws" (default): weight-stationary, array face is K x N, M streams.
+# "os": output-stationary 3D, array face is M x N and each PE holds a C[m][n]
+# accumulator. See rect_array_work/OS_3D_CONTRACT.md.
+parser.add_argument("--dataflow", choices=["ws", "os"], default="ws")
 parser.add_argument("--vlen", type=int, default=256)
 args = parser.parse_args()
 
@@ -138,12 +142,19 @@ valid_cpu = {
 # array). gem5's SystolicArrayFU already computes the fill/drain latency as
 # saSize = Width + Height - 1, so an independent height gives a real rectangular
 # timing model (no post-hoc approximation needed).
+#
+# What Height MEANS depends on --dataflow: in "ws" the array face is K x N so
+# Height is the K axis; in "os" the face is M x N so Height is the M axis. The
+# saSize formula is the same either way (it is just the 2D skew across the face),
+# but the drain behaviour is not -- see OS_3D_CONTRACT.md.
 _vlane_height = args.vlane_height if args.vlane_height and args.vlane_height > 0 else args.vlane
 _vlane_depth = args.vlane_depth if args.vlane_depth and args.vlane_depth > 0 else 1
 SystolicArray.systolicArrayWidth = args.vlane
 SystolicArray.systolicArrayHeight = _vlane_height
 SystolicArray.systolicArrayDepth = _vlane_depth
-print(f"[RECT-PE] SystolicArray Width(Sn)={args.vlane} Height(Sm)={_vlane_height} Depth(Sk)={_vlane_depth}")
+SystolicArray.systolicDataflow = 1 if args.dataflow == "os" else 0
+print(f"[RECT-PE] SystolicArray Width(Sn)={args.vlane} Height(Sm)={_vlane_height} "
+      f"Depth(Sk)={_vlane_depth} Dataflow={args.dataflow}")
 binary = args.cmd
 
 # Main System Setup
