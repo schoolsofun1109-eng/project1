@@ -47,16 +47,20 @@ def parse_spad_symbols(binary):
 
 
 def parse_arg_to_spad(mlir_path):
-    """{arg_index: spad_symbol} from the MLIR kernel.
+    """{arg_index: [spad_symbol, ...]} from the MLIR kernel.
 
     The kernel signature names the DRAM tensors and each is bound to a *_spad
     global; the DMAs then move between the two. The Nth kernel argument is the
     Nth `arg` in TOGSim's trace, which is what lets us join them.
+
+    An argument can touch more than one scratchpad -- `cat` writes its single
+    output from X0_spad and then from X1_spad -- so each argument keeps the list
+    of scratchpads its DMAs use, in program order.
     """
     with open(mlir_path) as f:
         text = f.read()
 
-    m = re.search(r"func\.func @kernel\(([^)]*)\)", text)
+    m = re.search(r"func\.func\s+@kernel\s*\(([^)]*)\)", text)
     if not m:
         return {}
     # "%X: memref<...>, %W: memref<...>" -> ["X", "W", ...]
@@ -78,7 +82,9 @@ def parse_arg_to_spad(mlir_path):
         src, dst = operands[0], operands[1]
         for a, b in ((src, dst), (dst, src)):
             if a in arg_names and b in buf_to_spad:
-                arg_to_spad[arg_names.index(a)] = buf_to_spad[b]
+                spads = arg_to_spad.setdefault(arg_names.index(a), [])
+                if buf_to_spad[b] not in spads:
+                    spads.append(buf_to_spad[b])
     return arg_to_spad
 
 
@@ -163,12 +169,14 @@ def report_kernel(log, outputs_dir, sizes):
 
     print(f"=== kernel {os.path.basename(run_dir)}  ({op_name}) ===")
     print("    tensors: " + ", ".join(
-        f"arg{i}->{s}@0x{spad_syms.get(s, 0):x}" for i, s in sorted(arg_to_spad.items())))
+        f"arg{i}->" + "/".join(f"{s}@0x{spad_syms.get(s, 0):x}" for s in spads)
+        for i, spads in sorted(arg_to_spad.items())))
 
     rows = []
     for cyc, core, iid, op, name, dram, rest in ISSUED_RE.findall(text):
         idx = int(name[3:]) if name.startswith("arg") and name[3:].isdigit() else None
-        spad = arg_to_spad.get(idx)
+        spads = arg_to_spad.get(idx) or []
+        spad = spads[0] if spads else None
         vaddr = spad_syms.get(spad, 0) if spad else 0
         sect, _ = section_of(vaddr, *sizes)
         tensor = spad[:-5] if spad else name  # X_spad -> X
