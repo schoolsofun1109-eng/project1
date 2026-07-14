@@ -118,6 +118,32 @@ class FunctionalSimulator():
 
         return array_size, file_path
 
+    def _max_spad_symbol_size(self, target_binary):
+        """Largest SPAD tensor symbol size (bytes) in the linked binary.
+
+        The MLIR compiler emits each SPAD buffer as a symbol named '*_spad' sized to one
+        lane's slice. `nm -S` prints "<addr> <size> <type> <name>"; we take the max size
+        over the *_spad symbols. This is the per-lane SRAM stride the kernel expects.
+        Returns 0 if none found (caller falls back).
+        """
+        try:
+            out = subprocess.run(
+                f"nm -S {target_binary}", shell=True,
+                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            ).stdout.decode('utf-8', 'ignore')
+        except Exception:
+            return 0
+        max_size = 0
+        for line in out.splitlines():
+            parts = line.split()
+            # "<addr> <size> <type> <name>" -- only symbols with a size field
+            if len(parts) >= 4 and parts[3].endswith('_spad'):
+                try:
+                    max_size = max(max_size, int(parts[1], 16))
+                except ValueError:
+                    pass
+        return max_size
+
     def run_spike(self, args, arg_attributes, runtime_path, binary, vectorlane_size=4, spad_info=None, cleanup=False, silent_mode=False):
         load_path = runtime_path
         dump_path = runtime_path
@@ -134,11 +160,31 @@ class FunctionalSimulator():
         _, file_path = self.dump_args(args, arg_attributes, load_path, dump_path)
         file_path_str = ' '.join(file_path)
 
-        # Set hardware information
+        # Set hardware information.
+        # --scratchpad-size / the physical -m region cover the whole SPAD (all of
+        # IMEM+WMEM+OMEM); get_spad_size() = scratchpad_size * n_vu reconstructs the
+        # aggregate. The per-lane stride (vu_sram_byte) is a SEPARATE quantity: each lane
+        # holds one column of a 128-row section, so its stride must be one section divided
+        # across the lanes. Passing the aggregate as the stride (the old behaviour) made
+        # lane N of a section land N*aggregate bytes away -- overrunning its own section
+        # into the next buffer and even into output DRAM, silently corrupting values for
+        # any matmul that tiles N together with M or K. --vu-sram-stride decouples the two.
         spad_option = f"-m0x{0x80000000:x}:0x{100<<30:x},0x{spad_info['spad_paddr']:x}:0x{spad_info['spad_size']*vectorlane_size:x} " + \
             f"--scratchpad-base-paddr={spad_info['spad_paddr']} " + \
             f"--scratchpad-base-vaddr={spad_info['spad_vaddr']} " + \
             f"--scratchpad-size={spad_info['spad_size']} "
+        # In IMEM/WMEM/OMEM sectioned mode, pass a per-lane SRAM stride SEED. The authoritative
+        # per-lane stride is derived inside Spike per kernel (torchsim_config3.h): it is the
+        # max over the kernel's DMAs of product(block_dim)*element_size -- exactly the per-lane
+        # data layout the MLIR compiler produced for this hardware (matmul tile column = 0x200,
+        # RMSNorm row block = 0x800, ...). That is a hardware-defined layout, not a tunable.
+        # This seed is only a lower bound used before the first config3; nm -S of the linked
+        # binary's largest *_spad symbol is a safe seed (<= the block-product Spike computes).
+        if 'imem_size' in spad_info:
+            vu_sram_stride = self._max_spad_symbol_size(target_binary)
+            if not vu_sram_stride:
+                vu_sram_stride = spad_info['imem_size'] // vectorlane_size  # fallback
+            spad_option += f"--vu-sram-stride={vu_sram_stride} "
         vectorlane_option = f"--vectorlane-size={vectorlane_size}"
 
         # Output-stationary 3D mode: thread Sm and Sk to Spike
