@@ -118,13 +118,107 @@ class FunctionalSimulator():
 
         return array_size, file_path
 
-    def _max_spad_symbol_size(self, target_binary):
-        """Largest SPAD tensor symbol size (bytes) in the linked binary.
+    def _kernel_addr_range(self, target_binary):
+        """(start, end) hex address strings spanning the `kernel` function, for
+        Spike's --kernel-addr.
 
-        The MLIR compiler emits each SPAD buffer as a symbol named '*_spad' sized to one
-        lane's slice. `nm -S` prints "<addr> <size> <type> <name>"; we take the max size
-        over the *_spad symbols. This is the per-lane SRAM stride the kernel expects.
-        Returns 0 if none found (caller falls back).
+        Previously this shelled out to `objdump -d ... > self.path/binary.dump`
+        followed by a separate `awk`/`grep` pipeline reading that file back. Under
+        Llama, several kernels compile and run concurrently (each `run_spike` call is
+        for a different kernel, so nothing serializes them), and objdump's stdout
+        redirect would occasionally race with the read -- `binary.dump` truncated or
+        not yet flushed -- so kernel_end_addr came back "" and Spike's --kernel-addr=:
+        crashed with `std::invalid_argument` out of std::stoull. Doing it in one
+        process (subprocess.run with stdout=PIPE, parsed here) removes the shared
+        intermediate file entirely, so there is nothing left to race on.
+        """
+        try:
+            nm_out = subprocess.run(
+                f"nm {target_binary}", shell=True,
+                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            ).stdout.decode('utf-8', 'ignore')
+        except Exception:
+            return "", ""
+        start_addr = None
+        for line in nm_out.splitlines():
+            if 'kernel' in line:
+                parts = line.split()
+                if parts:
+                    start_addr = parts[0]
+                    break
+        if not start_addr:
+            return "", ""
+
+        try:
+            objdump_out = subprocess.run(
+                f"riscv64-unknown-elf-objdump -d {target_binary}", shell=True,
+                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            ).stdout.decode('utf-8', 'ignore')
+        except Exception:
+            return "", ""
+        lines = objdump_out.splitlines()
+        start_idx = next((i for i, l in enumerate(lines) if start_addr in l), None)
+        if start_idx is None:
+            return "", ""
+        for line in lines[start_idx:]:
+            if 'ret' in line:
+                end_addr = line.split(':', 1)[0].strip()
+                if end_addr:
+                    return start_addr, end_addr
+                break
+        return "", ""
+
+    def _kernel_stack_size(self, target_binary):
+        """Bytes the kernel's call frame reserves, straight from its prologue.
+
+        Spike's SRAM lives at the top of each lane's slice, above the data: the
+        compiler places the kernel's stack at `spad_base + vu_sram_byte`, growing
+        down into the data region (torchsim spike-src decode.h: `spad_sp = baseAddr +
+        vu_sram_byte - (kernel_sb - kernel_sp)`). So vu_sram_byte has to be big enough
+        to hold both the kernel's tensors AND its stack, or the stack pointer lands
+        below the tensor data and every access looks like a stack overflow from the
+        first byte -- exactly what happened on a BMM kernel whose X/W/Y_spad (one
+        symbol per IMEM/WMEM/OMEM section, matmul's normal case) summed to only 128
+        bytes while its `kernel:` prologue reserved 208.
+
+        `sp,sp,-N` in the prologue is the size the compiler already committed to; we
+        just read it back rather than guessing. Returns 0 if not found (no stack
+        adjustment needed, or objdump failed).
+        """
+        try:
+            out = subprocess.run(
+                f"riscv64-unknown-elf-objdump -d {target_binary}", shell=True,
+                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            ).stdout.decode('utf-8', 'ignore')
+        except Exception:
+            return 0
+        m = re.search(r'<kernel>:.*?sp,sp,-(\d+)', out, re.DOTALL)
+        return int(m.group(1)) if m else 0
+
+    def _vu_sram_stride(self, target_binary, spad_info):
+        """The per-lane SRAM stride (vu_sram_byte) a kernel's code expects.
+
+        The MLIR compiler emits each SPAD buffer as a symbol named '*_spad', sized to one
+        lane's slice, and the linker packs a section's symbols back to back (see
+        mlir_codegen_backend.py: `T name_spad[compute_vec_size*vector_lane]`). So lane 1's
+        slice of the first symbol in a section starts right where lane 0's slice of the
+        *last* symbol in that section ends -- the stride from one lane to the next must
+        cover every symbol sharing that section, not just one.
+
+        matmul happens to have exactly one *_spad symbol per section (X/W/Y go to
+        IMEM/WMEM/OMEM respectively), so that section's total is just that symbol's size.
+        A kernel like RMSNorm's pointwise stage instead packs several tensors (weight, x,
+        the reduction result it reads, its output) into IMEM alone with nothing in
+        WMEM/OMEM, and all of those need to fit within one lane's stride.
+
+        Spike has a single vu_sram_byte for the whole kernel (not one per section), so we
+        take the busiest section: `nm -S` gives each symbol's (address, size), the address
+        sorts it into IMEM/WMEM/OMEM by spad_info's section vaddrs, and the stride is the
+        max of the three sections' symbol-size sums -- floored by the kernel's own stack
+        size (see _kernel_stack_size), since that stack lives in the same per-lane slice
+        and a small-tensor kernel (matmul-shaped, VPU-using) can otherwise ask for less
+        SRAM than its own call frame needs. Returns 0 if no *_spad symbols are found and
+        the kernel needs no stack margin (caller falls back).
         """
         try:
             out = subprocess.run(
@@ -133,29 +227,49 @@ class FunctionalSimulator():
             ).stdout.decode('utf-8', 'ignore')
         except Exception:
             return 0
-        max_size = 0
+        section_bounds = sorted(
+            (spad_info[f'{name}_vaddr'], spad_info[f'{name}_vaddr'] + spad_info[f'{name}_size'])
+            for name in ('imem', 'wmem', 'omem') if f'{name}_vaddr' in spad_info
+        )
+        section_totals = [0] * len(section_bounds)
         for line in out.splitlines():
             parts = line.split()
             # "<addr> <size> <type> <name>" -- only symbols with a size field
-            if len(parts) >= 4 and parts[3].endswith('_spad'):
-                try:
-                    max_size = max(max_size, int(parts[1], 16))
-                except ValueError:
-                    pass
-        return max_size
+            if len(parts) < 4 or not parts[3].endswith('_spad'):
+                continue
+            try:
+                addr, size = int(parts[0], 16), int(parts[1], 16)
+            except ValueError:
+                continue
+            for i, (lo, hi) in enumerate(section_bounds):
+                if lo <= addr < hi:
+                    section_totals[i] += size
+                    break
+        stride = max(section_totals, default=0)
+        # The stack has to fit ABOVE the tensor data within the same per-lane slice, not
+        # just be smaller than vu_sram_byte: decode.h's stack-overflow check is
+        # `addr >= spad_sp + vu_idx*vu_sram_byte` where spad_sp = baseAddr + vu_sram_byte -
+        # stack_size. For the tensor data's last valid byte (offset stride-1) to stay
+        # below spad_sp, vu_sram_byte must be at least stack_size + stride -- the SUM, not
+        # the max of the two, since the stack sits past the end of the data, not
+        # overlapping it. (A smaller margin looked sufficient on one run and then failed on
+        # the next: DRAM addresses shift between recompiles, so a barely-passing margin
+        # trips depending on which bytes of a tensor a given run happens to touch first.)
+        stack_size = self._kernel_stack_size(target_binary)
+        return stride + stack_size
 
     def run_spike(self, args, arg_attributes, runtime_path, binary, vectorlane_size=4, spad_info=None, cleanup=False, silent_mode=False):
         load_path = runtime_path
         dump_path = runtime_path
 
         target_binary = os.path.join(self.path, binary)
-        objdump = f"riscv64-unknown-elf-objdump -d {target_binary} > {os.path.join(self.path, 'binary.dump')}"
-        kernel_start = f"nm {target_binary} | grep 'kernel' | awk 'NR==1 {{print $1}}'"
-        kernel_end = f"nm {target_binary} | grep 'kernel' | awk 'NR==1 {{print $1}}' | xargs -I {{}} awk '/{{}}/,0' {os.path.join(self.path, 'binary.dump')} | grep ret | awk 'NR==1 {{print $1}}' | awk '{{gsub(/:$/, \"\"); print}}'"
-
-        subprocess.run(objdump, shell=True)
-        kernel_start_addr = subprocess.run(kernel_start, shell=True, stdout=subprocess.PIPE).stdout.strip().decode('utf-8')
-        kernel_end_addr = subprocess.run(kernel_end, shell=True, stdout=subprocess.PIPE).stdout.strip().decode('utf-8')
+        kernel_start_addr, kernel_end_addr = self._kernel_addr_range(target_binary)
+        if not kernel_start_addr or not kernel_end_addr:
+            raise RuntimeError(
+                f"Could not determine kernel address range for {target_binary} "
+                f"(start={kernel_start_addr!r} end={kernel_end_addr!r}); "
+                "objdump/nm likely failed or found no 'kernel' symbol / no 'ret' in it."
+            )
 
         _, file_path = self.dump_args(args, arg_attributes, load_path, dump_path)
         file_path_str = ' '.join(file_path)
@@ -173,15 +287,14 @@ class FunctionalSimulator():
             f"--scratchpad-base-paddr={spad_info['spad_paddr']} " + \
             f"--scratchpad-base-vaddr={spad_info['spad_vaddr']} " + \
             f"--scratchpad-size={spad_info['spad_size']} "
-        # In IMEM/WMEM/OMEM sectioned mode, pass a per-lane SRAM stride SEED. The authoritative
-        # per-lane stride is derived inside Spike per kernel (torchsim_config3.h): it is the
-        # max over the kernel's DMAs of product(block_dim)*element_size -- exactly the per-lane
-        # data layout the MLIR compiler produced for this hardware (matmul tile column = 0x200,
-        # RMSNorm row block = 0x800, ...). That is a hardware-defined layout, not a tunable.
-        # This seed is only a lower bound used before the first config3; nm -S of the linked
-        # binary's largest *_spad symbol is a safe seed (<= the block-product Spike computes).
+        # In IMEM/WMEM/OMEM sectioned mode, pass the per-lane SRAM stride (vu_sram_byte).
+        # It is fixed for the whole kernel -- Spike no longer derives or grows it per DMA
+        # (see torchsim_config3.h) -- because the stride is a property of the linker layout
+        # the compiler already committed to before Spike ever runs, not something knowable
+        # DMA by DMA from a single tensor's shape. _vu_sram_stride sums each section's
+        # *_spad symbols and takes the busiest section; see its docstring for why a sum.
         if 'imem_size' in spad_info:
-            vu_sram_stride = self._max_spad_symbol_size(target_binary)
+            vu_sram_stride = self._vu_sram_stride(target_binary, spad_info)
             if not vu_sram_stride:
                 vu_sram_stride = spad_info['imem_size'] // vectorlane_size  # fallback
             spad_option += f"--vu-sram-stride={vu_sram_stride} "

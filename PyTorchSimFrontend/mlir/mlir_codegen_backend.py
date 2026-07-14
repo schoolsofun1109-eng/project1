@@ -1213,15 +1213,19 @@ class MLIRKernel(mlir_common.BaseMLIRKernel):
             local_tile_desc.vmap.vlane_stride = kg_tile_desc.vmap.vlane_stride
         # Case 3. Tile is 2-D tile
         elif len(local_dims) == 2:
-            is_reduction = self.reduction_depth == 1 and not store_reduction
-            if is_reduction:
-                local_tile_desc.set_tile_size([kg_tile_desc.get_dim_size(dim) for dim in local_dims], [1, 0])
-                local_tile_desc.vmap.vlane_split_axis = local_vlane_split_axis
-                local_tile_desc.vmap.vlane_stride = kg_tile_desc.vmap.vlane_stride
-            else:
-                local_tile_desc.set_tile_size([kg_tile_desc.get_dim_size(dim) for dim in local_dims])
-                local_tile_desc.vmap.vlane_split_axis = local_vlane_split_axis
-                local_tile_desc.vmap.vlane_stride = kg_tile_desc.vmap.vlane_stride
+            # Lay the tile out so that the axis handed to the lanes is the outer
+            # one: each lane's own slice then sits contiguously in its section.
+            # This has to hold for every kernel, not just reductions -- a reduction
+            # and the pointwise kernel that consumes its result pass the same
+            # tensor through SRAM, so if only one of them transposes, the second
+            # reads back rows where the first wrote columns. (Under the original
+            # unified scratchpad a lane owned a megabyte, so a disagreement was
+            # invisible; with IMEM/WMEM/OMEM it corrupts the data.)
+            axis_order = [1, 0] if local_vlane_split_axis == 0 else None
+            local_tile_desc.set_tile_size(
+                [kg_tile_desc.get_dim_size(dim) for dim in local_dims], axis_order)
+            local_tile_desc.vmap.vlane_split_axis = local_vlane_split_axis
+            local_tile_desc.vmap.vlane_stride = kg_tile_desc.vmap.vlane_stride
         # Case 3. Tile is 3-D tile
         elif len(local_dims) == 3:
             is_reduction = self.reduction_depth < 3 and not store_reduction

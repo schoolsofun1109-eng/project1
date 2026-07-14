@@ -440,14 +440,26 @@ class TileAdjustMixin():
             self._tile_size[i] = best_tile
 
     def select_vlane_axis(self):
-        best_vlane_split_axis = 0
-        best_used_vlane = math.ceil(self._tile_size[0] / self.vmap.vlane_stride)
-        for i, dim in enumerate(self._tile_size[1:len(self._tile_size)-self.nr_rdim]):
-            used_vlane = math.ceil(dim / self.vmap.vlane_stride)
-            if used_vlane > best_used_vlane:
-                best_used_vlane = used_vlane
-                best_vlane_split_axis = i+1
-        self.vmap.vlane_split_axis = best_vlane_split_axis
+        """Pick the axis whose slices are handed to the vector lanes.
+
+        Always the outermost axis. Picking the widest axis instead -- the one
+        that keeps the most lanes busy -- lets two kernels lay the *same* tensor
+        out differently in SRAM, and one kernel's output is the next one's input.
+        RMSNorm is the case in point: its reduction kernel excludes the reduced
+        axis from the choice and so splits by row, while its pointwise
+        follow-up sees a 32x256 tile, finds the 256-wide column axis fills 128
+        lanes against the row axis's 16, and splits by column. The second kernel
+        then reads back, row-major, what the first wrote column-major.
+
+        The original code got away with this because the unified scratchpad gave
+        every lane a megabyte of its own, so a disagreeing layout still landed
+        somewhere harmless. With IMEM/WMEM/OMEM the lane stride is the section
+        divided by the lanes, and the mismatch corrupts the data.
+
+        Consistency across kernels beats lane occupancy: a row split leaves lanes
+        idle when the tile is wide, but every kernel agrees on where a row lives.
+        """
+        self.vmap.vlane_split_axis = 0
 
     def pad_vlane_tile(self):
         # FIXME. this doesn't follow tile constraints...
