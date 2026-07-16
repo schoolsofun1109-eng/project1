@@ -613,7 +613,14 @@ class MLIRWrapperKenrelGroup(cpp.KernelGroup):
 class BaseMLIRHardwareInfo():
     def __init__(self):
         # Default HW setting
+        # vector_lane = PE array width Sn (pe_N): used ONLY for GEMM/BMM/Conv
+        # tiling, where the tile is laid across the systolic-array width.
         self.vector_lane = extension_config.vpu_num_lanes
+        # simd_lane = 1D SIMD lane count (simd_K): used for VPU vector/reduction
+        # ops (RMSNorm/softmax/elementwise/...) that DON'T touch the PE array.
+        # Originally the code assumed pe_N == simd_K and reused vector_lane
+        # everywhere; these are independent knobs, so VPU paths must use this.
+        self.simd_lane = extension_config.vpu_simd_lanes
         self.spad_info = extension_config.CONFIG_SPAD_INFO
         self.num_cores = extension_config.CONFIG_NUM_CORES
         self.vlen = extension_config.vpu_vector_length_bits
@@ -803,10 +810,14 @@ class BaseMLIRKernel(common.Kernel, BaseMLIRHardwareInfo):
         vlane_split_axis = len(vars) - 1
         vlane_stride = 2 # Set minimum vlane stride
 
-        # Set initial tile size & vector lane mapping
+        # Set initial tile size & vector lane mapping.
+        # This path (tile_desc is None) is the generic VPU/vector-op tiling --
+        # GEMM/BMM/Conv set tile_desc earlier via *_combination_mapping and skip
+        # here. So the lane count is the 1D SIMD lane count (simd_K), not the PE
+        # array width (pe_N).
         if self.kernel_group.tile_desc is None:
-            tile_size = MLIRMultiDimTile.init_tile_size(self.ranges, vlane_stride, self.vector_lane)
-            init_tile_desc = MLIRMultiDimTile(tile_size, self.vector_lane, vlane_split_axis, vlane_stride)
+            tile_size = MLIRMultiDimTile.init_tile_size(self.ranges, vlane_stride, self.simd_lane)
+            init_tile_desc = MLIRMultiDimTile(tile_size, self.simd_lane, vlane_split_axis, vlane_stride)
             init_tile_desc.nr_rdim = len(reduction_vars)
             self.kernel_group.set_tile_info(init_tile_desc)
 

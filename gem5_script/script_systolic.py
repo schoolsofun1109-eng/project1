@@ -24,6 +24,14 @@ parser.add_argument("--vlane-height", type=int, default=0)
 # 3D PE array: depth Sk (parallel K-reduction layers). 1 = 2D (no depth).
 parser.add_argument("--vlane-depth", type=int, default=1)
 parser.add_argument("--vlen", type=int, default=256)
+# Dataflow: weight-stationary (default) or output-stationary 3D timing path.
+parser.add_argument("--dataflow", choices=["ws", "os"], default="ws",
+                    help="systolic array dataflow: ws=weight-stationary, os=output-stationary")
+# On-chip SRAM (scratchpad) bank model. num-banks interleaves addresses across
+# banks (granule-strided) so accesses spread over banks; each bank has bank-bw
+# peak bandwidth. Default 1 bank reproduces the old single-controller SPAD.
+parser.add_argument("--spad-num-banks", type=int, default=1)
+parser.add_argument("--spad-bank-bw-gbps", type=float, default=32.0)
 args = parser.parse_args()
 
 class InstMemory(SimpleMemory):
@@ -143,7 +151,8 @@ _vlane_depth = args.vlane_depth if args.vlane_depth and args.vlane_depth > 0 els
 SystolicArray.systolicArrayWidth = args.vlane
 SystolicArray.systolicArrayHeight = _vlane_height
 SystolicArray.systolicArrayDepth = _vlane_depth
-print(f"[RECT-PE] SystolicArray Width(Sn)={args.vlane} Height(Sm)={_vlane_height} Depth(Sk)={_vlane_depth}")
+SystolicArray.systolicDataflow = 1 if args.dataflow == "os" else 0
+print(f"[RECT-PE] SystolicArray Width(Sn)={args.vlane} Height(Sm)={_vlane_height} Depth(Sk)={_vlane_depth} Dataflow={args.dataflow}")
 binary = args.cmd
 
 # Main System Setup
@@ -166,7 +175,7 @@ system.cpu.ArchISA.vlen = args.vlen
 
 # Memory range
 granule_sz = 64
-spad_num_bank = 1
+spad_num_bank = args.spad_num_banks   # SRAM bank count (from config imem_num_banks)
 system.mem_ranges = [AddrRange(start=0, size="16GB")]
 
 system.membus = SpmXBar(
@@ -186,7 +195,11 @@ system.cpu.dcache_port = system.membus.cpu_side_ports
 system.cpu.createInterruptController()
 
 # Create and connect memory nodes
-multi_banked_spm = MultiBankMemorySystem(system.membus.mem_side_ports, system.mem_ranges[0], num_banks=spad_num_bank, granule_size=granule_sz)
+# Total SRAM bandwidth = num_banks x per-bank bandwidth, so more banks = more
+# aggregate bandwidth (MultiBankMemorySystem divides this back per bank).
+_spad_total_bw = f"{spad_num_bank * args.spad_bank_bw_gbps:.4f}GB/s"
+print(f"[SRAM-BANK] SPAD banks={spad_num_bank} bank_bw={args.spad_bank_bw_gbps:.2f}GB/s total={_spad_total_bw}")
+multi_banked_spm = MultiBankMemorySystem(system.membus.mem_side_ports, system.mem_ranges[0], num_banks=spad_num_bank, granule_size=granule_sz, total_bandwidth=_spad_total_bw)
 system.mem_ctrls = multi_banked_spm.get_ctrls()
 
 system.system_port = system.membus.cpu_side_ports

@@ -1142,13 +1142,15 @@ class MLIRTemplateKernel(MLIRKernel, BaseMLIRHardwareInfo):
         if reduction_key in self.reduction_epilogue_result:
             return self.reduction_epilogue_result[reduction_key]
 
-        # Reduction fusion codegen part
+        # Reduction fusion codegen part. This derives a tile from the kernel's
+        # base tile_desc (a VPU/reduction op), so inherit its lane count rather
+        # than hardcoding pe_N -- for vector ops the base uses simd_K.
         vec_size = self.compute_body_loop.step
         type_name = mlir_common.DTYPE_TO_MLIR[dtype]
         new_tile_size = self.kernel_group.tile_desc.get_tile_size()[:-1] + [vec_size]
         new_vlane_split_axis = self.kernel_group.tile_desc.vmap.vlane_split_axis
         new_vlane_stride = self.kernel_group.tile_desc.vmap.vlane_stride
-        local_tile_desc = mlir_common.MLIRMultiDimTile(new_tile_size, self.vector_lane, new_vlane_split_axis, new_vlane_stride, vec_size)
+        local_tile_desc = mlir_common.MLIRMultiDimTile(new_tile_size, self.kernel_group.tile_desc.vmap.vector_lane, new_vlane_split_axis, new_vlane_stride, vec_size)
 
         tile_shape = local_tile_desc.get_mlir_shape(type_name)
         vshape = local_tile_desc.get_mlir_vshape(type_name)
@@ -1196,10 +1198,11 @@ class MLIRTemplateKernel(MLIRKernel, BaseMLIRHardwareInfo):
         vlane_split_axis = self.kernel_group.tile_desc.vmap.vlane_split_axis
         vlane_stride = self.kernel_group.tile_desc.vmap.vlane_stride
 
-        # Create final buffer descriptor
+        # Create final buffer descriptor. Reduction-op derived tile: inherit the
+        # base tile's lane count (simd_K for VPU ops), not pe_N.
         nr_outer_loop = self.reduction_nr_outer_loop
         tile_size = self.kernel_group.tile_desc.get_tile_size()[:-1]
-        final_tile_desc = mlir_common.MLIRMultiDimTile(tile_size, self.vector_lane, vlane_split_axis, vlane_stride*nr_outer_loop*2)
+        final_tile_desc = mlir_common.MLIRMultiDimTile(tile_size, self.kernel_group.tile_desc.vmap.vector_lane, vlane_split_axis, vlane_stride*nr_outer_loop*2)
         final_tile_shape = final_tile_desc.get_mlir_shape(mlir_dtype)
         final_tile_stride = final_tile_desc.get_tile_stride()
         sram_var, sram_index_var = self.get_scratchpad_buffer(dtype, name, final_tile_desc, index, buffer=self.const_buffer)

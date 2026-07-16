@@ -91,18 +91,27 @@ def __getattr__(name):
               "wmem_vaddr" : wmem_vaddr,
               "wmem_size" : wmem_size,
               "omem_vaddr" : omem_vaddr,
-              "omem_size" : omem_size
+              "omem_size" : omem_size,
+              # SRAM bank model (gem5 timing): per-role bank count and bank width.
+              # IMEM/WMEM/OMEM use the same bank geometry in every config, so the
+              # IMEM values represent the interleaving each access stream sees.
+              "sram_num_banks" : config_yaml["imem_num_banks"],
+              "sram_bitwidth" : config_yaml["imem_sram_bitwidth"]
             }
         else:
             # Fallback to unified SRAM mode
             return {
               "spad_vaddr" : 0xD0000000,
               "spad_paddr" : 0x2000000000,
-              "spad_size" : config_yaml["vpu_spad_size_kb_per_lane"] << 10
+              "spad_size" : config_yaml["vpu_spad_size_kb_per_lane"] << 10,
+              "sram_num_banks" : 1,
+              "sram_bitwidth" : 256
             }
 
     if name == "CONFIG_NUM_CORES":
         return config_yaml["num_cores"]
+    if name == "core_freq_mhz":
+        return config_yaml["core_freq_mhz"]
     if name == "vpu_vector_length_bits":                 # 1D SIMD per-lane bit width (= simd_bit)
         return config_yaml.get("simd_bit", config_yaml.get("vpu_vector_length_bits"))
 
@@ -110,6 +119,20 @@ def __getattr__(name):
         return config_yaml['pytorchsim_functional_mode']
     if name == "pytorchsim_timing_mode":
         return config_yaml['pytorchsim_timing_mode']
+
+    # PE array dataflow. Decides what the array's axes MEAN.
+    #   "ws" (default, legacy): weight-stationary. Stationary tile is K x N, so
+    #     the array face is height=K by width=N and M streams over time. Here
+    #     pe_M (systolic_array_height) is the K/reduction axis, and K per array
+    #     pass = pe_M * pe_P.
+    #   "os": output-stationary 3D. Array face is height=M by width=N; each PE
+    #     owns the accumulator for one C[m][n], pe_P=Sk is the depth (K values
+    #     reduced per PE per cycle). Both operands stream; K is tiled by Sk. Here
+    #     pe_M finally means the token/M axis.
+    if name == "systolic_dataflow":
+        df = str(config_yaml.get("dataflow", "ws")).lower()
+        assert df in ("ws", "os"), f"Invalid dataflow {df!r}: expected 'ws' or 'os'"
+        return df
 
     # 3D PE array: depth of the K-reduction axis (Sk).
     # Sk=1 => classic 2D systolic array (identical cycles to before).
@@ -136,6 +159,9 @@ def __getattr__(name):
         # geometry is non-square (pe_M != pe_N) or has depth (pe_P > 1).
         if "systolic_array_real_rect" in config_yaml:
             return bool(config_yaml["systolic_array_real_rect"])
+        # Output-stationary always needs the real path (MLIR/gem5 model it directly).
+        if str(config_yaml.get("dataflow", "ws")).lower() == "os":
+            return True
         _N = config_yaml.get("pe_N", config_yaml.get("vpu_num_lanes"))
         _M = config_yaml.get("pe_M", config_yaml.get("systolic_array_height", _N))
         _P = config_yaml.get("pe_P", config_yaml.get("systolic_array_size_k", 1))

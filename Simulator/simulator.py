@@ -140,11 +140,22 @@ class FunctionalSimulator():
             f"--scratchpad-base-vaddr={spad_info['spad_vaddr']} " + \
             f"--scratchpad-size={spad_info['spad_size']} "
         vectorlane_option = f"--vectorlane-size={vectorlane_size}"
+        # The FUNCTIONAL (accuracy) binary is always compiled as WS (see
+        # _rect_height_opt(force_ws=True) in extension_codecache): OS and WS give
+        # identical matmul VALUES, so the value-check runs the validated WS
+        # kernel and Spike stays in WS mode. Only the TIMING (gem5) binary uses
+        # the OS kernel/timing. Hence NO --sa-dataflow=os here.
+        sa_options = ""
         kernel_address = f"--kernel-addr={kernel_start_addr}:{kernel_end_addr}"
         base_path= f"--base-path={runtime_path}"
         os.makedirs(os.path.join(runtime_path, "indirect_access"), exist_ok=True)
         os.makedirs(os.path.join(runtime_path, "dma_access"), exist_ok=True)
-        run = f'spike --isa rv64gcv_zfh --varch=vlen:256,elen:64 {vectorlane_option} {spad_option} {kernel_address} {base_path} /workspace/riscv-pk/build/pk {target_binary} {file_path_str}'
+        # VLEN must match what codegen compiled the kernel for (it lowers RVV
+        # vsetvli using vlen = vpu_vector_length_bits = simd_bit). Hardcoding
+        # vlen:256 here silently mismatches the binary whenever simd_bit != 256,
+        # which can corrupt results; thread the real config value instead.
+        _vlen = extension_config.vpu_vector_length_bits
+        run = f'spike --isa rv64gcv_zfh --varch=vlen:{_vlen},elen:64 {vectorlane_option} {sa_options} {spad_option} {kernel_address} {base_path} /workspace/riscv-pk/build/pk {target_binary} {file_path_str}'
         if not silent_mode:
             logger.debug(f"[Spike] cmd> {run}")
             logger.info("[Spike] Running Spike simulator")
@@ -205,7 +216,12 @@ class CycleSimulator():
     def compile_and_simulate(self, target_binary, vectorlane_size, silent_mode=False):
         dir_path = os.path.join(os.path.dirname(target_binary), "m5out")
         gem5_script_path = os.path.join(extension_config.CONFIG_TORCHSIM_DIR, "gem5_script/script_systolic.py")
-        gem5_cmd = [extension_config.CONFIG_GEM5_PATH, "-r", "--stdout-file=sto.log", "-d", dir_path, gem5_script_path, "-c", target_binary, "--vlane", str(vectorlane_size)]
+        # --vlen = the VPU's per-lane SIMD register width (simd_bit). gem5's cycle
+        # count for a vector<N> op depends on VLEN (LMUL = N*SEW/VLEN), so a
+        # narrower SIMD unit must take proportionally more cycles. Previously
+        # gem5 fell back to its default 256, making timing independent of
+        # simd_bit; thread the real config value so cycles scale with it.
+        gem5_cmd = [extension_config.CONFIG_GEM5_PATH, "-r", "--stdout-file=sto.log", "-d", dir_path, gem5_script_path, "-c", target_binary, "--vlane", str(vectorlane_size), "--vlen", str(extension_config.vpu_vector_length_bits)]
 
         # Real rectangular / 3D array: tell gem5 the array HEIGHT Sm (--vlane-height,
         # saSize = Sm+Sn-1) and DEPTH Sk (--vlane-depth, Sk parallel K-reduction
@@ -217,6 +233,28 @@ class CycleSimulator():
                 gem5_cmd += ["--vlane-height", str(sm)]
             if sk > 1:
                 gem5_cmd += ["--vlane-depth", str(sk)]
+
+        # SRAM bank model: thread the config's on-chip SRAM bank count + per-bank
+        # bandwidth into the gem5 scratchpad so num_banks actually affects timing
+        # (address interleaving across banks + per-bank bandwidth). Previously the
+        # gem5 SPAD was hardcoded to a single bank, so imem/wmem/omem_num_banks
+        # only sized capacity and never influenced cycles.
+        try:
+            _spad = extension_config.CONFIG_SPAD_INFO
+            _nbanks = int(_spad.get("sram_num_banks", 1))
+            _bitw = int(_spad.get("sram_bitwidth", 256))
+            # per-bank peak = (bitwidth/8 bytes) x core clock (bytes/s)
+            _bank_bw_gbps = (_bitw / 8.0) * extension_config.core_freq_mhz * 1e6 / 1e9
+            if _nbanks >= 1 and (_nbanks & (_nbanks - 1)) == 0:   # power of two only
+                gem5_cmd += ["--spad-num-banks", str(_nbanks),
+                             "--spad-bank-bw-gbps", f"{_bank_bw_gbps:.4f}"]
+        except Exception as _e:
+            logger.debug(f"[Gem5] SRAM bank wiring skipped: {_e}")
+            # Output-stationary changes what the array does per cycle (both
+            # operands stream, outputs drain only after the K loop), so gem5
+            # needs the dataflow too -- geometry alone is not enough.
+            if extension_config.systolic_dataflow == "os":
+                gem5_cmd += ["--dataflow", "os"]
 
         if not silent_mode:
             logger.debug(f"[Gem5] cmd> {' '.join(gem5_cmd)}")

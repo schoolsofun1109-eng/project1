@@ -1,0 +1,52 @@
+num_cores: 1
+core_freq_mhz: 940
+core_stats_print_period_cycles: 10000
+num_systolic_array_per_core: 1
+
+# ===== 3D OUTPUT-STATIONARY PE array =====
+# Array face is M x N: each PE(m,n) owns the accumulator for one C[m][n].
+# pe_P = Sk is the depth -- K values reduced per PE per cycle via an adder tree.
+# Both operands stream; K is tiled by Sk. Accumulate in-array over K, drain once.
+dataflow: os
+pe_M: 128     # Sm = M / token   (array height)
+pe_N: 128     # Sn = N / out-ch  (array width)
+pe_P: 8       # Sk = K depth (=nr_element, 정렬)
+
+# ===== 1D SIMD =====
+simd_K: 128
+simd_bit: 256
+
+dram_type: ramulator2
+dram_freq_mhz: 940
+dram_channels: 16
+dram_stats_print_period_cycles: 10000
+ramulator_config_path: ../configs/ramulator2_configs/HBM2_TPUv3.yaml
+
+icnt_type: simple
+icnt_latency_cycles: 10
+icnt_freq_mhz: 940
+icnt_injection_ports_per_core: 16
+
+# IMEM (Input Memory) - 128KB
+imem_num_banks: 8
+imem_sram_bitwidth: 256
+imem_sram_depth: 512
+
+# WMEM (Weight Memory) - 128KB
+wmem_num_banks: 8
+wmem_sram_bitwidth: 256
+wmem_sram_depth: 512
+
+# OMEM (Output Memory) - 128KB
+omem_num_banks: 8
+omem_sram_bitwidth: 256
+omem_sram_depth: 512
+
+pytorchsim_functional_mode: false
+pytorchsim_timing_mode: true
+
+codegen_mapping_strategy: heuristic
+codegen_autotune_max_retry: 5
+codegen_autotune_template_topk: 5
+
+codegen_compiler_optimization: all

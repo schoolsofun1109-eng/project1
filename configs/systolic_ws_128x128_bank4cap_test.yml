@@ -1,0 +1,48 @@
+num_cores: 1
+core_freq_mhz: 940
+core_stats_print_period_cycles: 10000
+num_systolic_array_per_core: 1
+
+# ===== PE Array:  M(token) x N(output-ch) x P(input-ch) =====
+pe_M: 128
+pe_N: 128
+pe_P: 1
+
+# ===== 1D SIMD =====
+simd_K: 128
+simd_bit: 256
+
+dram_type: ramulator2
+dram_freq_mhz: 940
+dram_channels: 16
+dram_stats_print_period_cycles: 10000
+ramulator_config_path: ../configs/ramulator2_configs/HBM2_TPUv3.yaml
+
+icnt_type: simple
+icnt_latency_cycles: 10
+icnt_freq_mhz: 940
+icnt_injection_ports_per_core: 16
+
+# IMEM (Input Memory) - 128KB
+imem_num_banks: 4
+imem_sram_bitwidth: 256
+imem_sram_depth: 1024
+
+# WMEM (Weight Memory) - 128KB
+wmem_num_banks: 4
+wmem_sram_bitwidth: 256
+wmem_sram_depth: 1024
+
+# OMEM (Output Memory) - 128KB
+omem_num_banks: 4
+omem_sram_bitwidth: 256
+omem_sram_depth: 1024
+
+pytorchsim_functional_mode: true
+pytorchsim_timing_mode: true
+
+codegen_mapping_strategy: heuristic
+codegen_autotune_max_retry: 5
+codegen_autotune_template_topk: 5
+
+codegen_compiler_optimization: all

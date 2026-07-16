@@ -112,7 +112,7 @@ def dump_metadata(args, arg_attributes, path):
             file.write(f'{arg_name}=({arg_attribute[0]}, {arg.dtype}, {arg.shape})\n')
     return
 
-def _rect_height_opt(vectorlane_size):
+def _rect_height_opt(vectorlane_size, force_ws=False):
     """Extra ``systolic-array-height=<Sm*Sk>`` token for the pytorchsim-to-vcix pass.
 
     The depth Sk's dominant timing effect is the reduced PASS COUNT: a 3D array
@@ -122,11 +122,32 @@ def _rect_height_opt(vectorlane_size):
     gem5 additionally receives Sm (--vlane-height, fill) and Sk (--vlane-depth,
     adder-tree latency) so it reports the true 3D geometry (WxHxD). Empty when
     Sm*Sk == Sn (== the default square tiling) or real mode is off.
+
+    ``force_ws`` compiles the WS kernel even when dataflow==os. Used for the
+    FUNCTIONAL (Spike / accuracy) binary: OS and WS produce identical matmul
+    VALUES, so the value-check runs the validated WS kernel while only the
+    TIMING (gem5) binary uses the OS kernel/timing. This keeps values correct
+    regardless of the OS Spike accumulator path.
     """
     if not extension_config.systolic_array_real_rect:
         return ""
     sm = extension_config.systolic_array_height or vectorlane_size
     sk = extension_config.systolic_array_size_k or 1
+    if extension_config.systolic_dataflow == "os":
+        if force_ws:
+            # Functional accuracy binary for an OS config: matmul VALUES are
+            # dataflow-independent, so emit the plain square WS kernel (Sm/Sk are
+            # OS-only geometry). A square Sn x Sn WS matmul yields identical
+            # values and stays on the validated Spike WS path.
+            return ""
+        # Output-stationary 3D: the array face is Sm x Sn and each PE owns one
+        # C[m][n] accumulator, so M is tiled by Sm and K by Sk alone (Sk is the
+        # per-PE adder-tree depth). The MLIR pass emits the N->M->K OS kernel.
+        return (f" systolic-dataflow=os"
+                f" systolic-array-m-height={sm}"
+                f" systolic-array-k-depth={sk}")
+    # Weight-stationary (legacy): the array face is K x N, so height IS the K
+    # axis and one array pass consumes height * Sk values of K.
     k_per_pass = sm * sk
     if k_per_pass == vectorlane_size:
         return ""
@@ -139,7 +160,7 @@ def mlir_compile_command(filename, vectorlane_size, vlen=256):
             -test-loop-padding \
             -dma-fine-grained='systolic-array-size={vectorlane_size}' \
             -global-idx='vlen={vlen}' \
-            -test-pytorchsim-to-vcix='systolic-array-size={vectorlane_size}{_rect_height_opt(vectorlane_size)} vlen={vlen}' \
+            -test-pytorchsim-to-vcix='systolic-array-size={vectorlane_size}{_rect_height_opt(vectorlane_size, force_ws=True)} vlen={vlen}' \
             -test-memref-to-gemmini="vectorlane={vectorlane_size}" \
             -convert-linalg-to-loops \
             -convert-vector-to-scf='full-unroll' \
