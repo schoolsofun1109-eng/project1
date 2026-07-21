@@ -60,6 +60,9 @@ class Core {
   const uint32_t _id;
   const SimulationConfig _config;
   uint32_t _num_systolic_array_per_core;
+  uint32_t _weight_buffers;
+  /** Weight buffers currently claimed by an in-flight MAC pass. */
+  uint32_t _weight_bufs_in_use = 0;
   uint32_t _systolic_array_rr = 0;
 
   /* DMA Unit */

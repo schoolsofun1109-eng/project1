@@ -3,6 +3,7 @@ core_freq_mhz: 700
 core_stats_print_period_cycles: 10000
 
 # ===== PE Array:  M(token) x N(output-ch) x P(input-ch) =====
+dataflow: os          # output-stationary (전 config OS 전환)
 pe_M: 128
 pe_N: 128
 pe_P: 1

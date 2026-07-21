@@ -9,6 +9,7 @@ Core::Core(uint32_t id, SimulationConfig config)
       _core_cycle(0),
       _stat_dma_cycle(0),
       _num_systolic_array_per_core(config.num_systolic_array_per_core),
+      _weight_buffers(config.weight_buffers),
       _dma(id, config.dram_req_size, config.l2d_type != L2CacheType::NOCACHE) {
   _sa_compute_pipeline.resize(_num_systolic_array_per_core);
   _stat_tot_sa_compute_cycle.resize(_num_systolic_array_per_core);
@@ -59,6 +60,7 @@ std::queue<std::shared_ptr<Instruction>>& Core::get_compute_pipeline(int compute
   }
 }
 
+
 void Core::vu_cycle() {
   bool retry = true;
   while (retry) {
@@ -90,6 +92,9 @@ void Core::sa_cycle() {
           _stat_sa_compute_idle_cycle.at(i) += bubble;
           cycle_type& stat = _stat_sa_compute_cycle.at(i);
           stat = (bubble < stat) ? (stat - bubble) : 0;
+          if (_sa_compute_pipeline.at(i).front()->get_compute_type() == MATMUL &&
+              _weight_bufs_in_use > 0)
+            _weight_bufs_in_use--;          // pass done: its weight buffer frees
           finish_instruction(_sa_compute_pipeline.at(i).front());
           _sa_compute_pipeline.at(i).pop();
         } else {
@@ -103,6 +108,7 @@ void Core::sa_cycle() {
     }
   }
 }
+
 
 void Core::compute_cycle() {
   vu_cycle();
@@ -265,10 +271,33 @@ void Core::cycle() {
           break;
         case Opcode::COMP:
           {
+            // A weight feed claims one of the array's weight buffers, and that
+            // buffer stays claimed until the MAC pass streaming against it
+            // retires -- overwriting it earlier would corrupt the pass still in
+            // flight. Output-stationary reloads the weight every K-step (the
+            // accumulator owns the PE, so K is the innermost loop), so without
+            // this check every pass's weight issues back to back and the passes
+            // appear to overlap, which no real array can do.
+            //
+            // `break` here leaves the instruction un-issued and falls through to
+            // the loop's own `it++`; advancing the iterator here as well would
+            // skip the next instruction outright.
+            if (_weight_buffers > 0 &&
+                inst->get_compute_type() == PRELOAD &&
+                _weight_bufs_in_use >= _weight_buffers) {
+              break;
+            }
             auto& target_pipeline = get_compute_pipeline(inst->get_compute_type());
             if (target_pipeline.empty()) {
               inst->finish_cycle = _core_cycle + inst->get_compute_cycle();
-              inst->bubble_cycle = inst->get_overlapping_cycle();
+              // Nothing ahead to hide behind, so none of the declared overlap
+              // is actually realized and the array is exclusively busy for the
+              // whole duration. Refunding overlapping_cycle here would book
+              // those cycles as idle -- visibly wrong once weight_buffers
+              // serializes the passes, since every node then starts against an
+              // empty pipeline and the array would report ~3% utilization while
+              // being occupied end to end.
+              inst->bubble_cycle = 0;
             } else {
               int overlapped_cycle = std::min(target_pipeline.back()->finish_cycle - _core_cycle, inst->get_overlapping_cycle());
               int bubble_cycle = inst->get_overlapping_cycle() - overlapped_cycle;
@@ -291,6 +320,8 @@ void Core::cycle() {
                                                            *inst));
               target_pipeline.push(inst);
               issued = true;
+              if (inst->get_compute_type() == PRELOAD)
+                _weight_bufs_in_use++;      // released when its MAC pass retires
               if (inst->get_compute_type()) {
                 _stat_gemm_inst++;
               }

@@ -25,6 +25,14 @@ struct SimulationConfig {
   uint32_t core_freq_mhz;
   uint32_t core_print_interval = 0;
   uint32_t num_systolic_array_per_core = 1;
+  // How many weight tiles the PE array can hold at once. Output-stationary
+  // reloads the weight every K-step (the accumulator owns the PE, so K must be
+  // the innermost loop), and a tile whose weight is resident cannot be evicted
+  // until its own MAC pass has finished consuming it. With one buffer the
+  // passes therefore serialize; two buffers let the next weight load hide
+  // behind the current pass. Zero disables the check (legacy behaviour: any
+  // number of passes may be in flight, which no real array can do).
+  uint32_t weight_buffers = 1;
   uint32_t num_stonne_per_core = 1;
   uint32_t num_stonne_port = 1;
 

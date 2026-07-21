@@ -89,6 +89,22 @@ def _scale_cycles_for_3d_pe(cycle_list, compute_types, k_tile, plane_size):
                 None if ratio is None else round(ratio, 3), cycle_list, scaled)
     return scaled
 
+def _weight_feed_is_concurrent():
+    """True when the weight feed should overlap the input feed instead of
+    running ahead of it.
+
+    gem5 times vwpush and vipush as two separate RISC-V instructions and TOGSim
+    then chains the two nodes, so a pass costs W_feed + A_feed. But inside the
+    modelled array the two feeds are independent (separate wQueue/iQueue, and
+    the SystolicArray debug trace shows osCompute starting on the very cycle the
+    A-slice lands, with no wait on the weight), so charging them back to back
+    double-counts. Only WS genuinely serializes: its stationary tile must be
+    fully resident before the M stream starts.
+    """
+    return (extension_config.operand_delivery == "concurrent"
+            and extension_config.systolic_dataflow == "os")
+
+
 LOCK_TIMEOUT = 600
 
 def hash_prefix(hash_value):
@@ -372,13 +388,46 @@ class MLIRCodeCache:
             # types and skip vector nodes. loop_size = [TOG_latency, TILE_N, TILE_K].
             k_tile = kwargs['loop_size'][-1] if kwargs.get('loop_size') else None
 
-            # Create TOG
-            w_offset, x_offset = vectorlane_size, vectorlane_size
-            if kwargs['loop_size'] is not None and kwargs['loop_size'][-3] < vectorlane_size:
-                x_offset = kwargs['loop_size'][-3]
-            if kwargs['loop_size'] is not None and kwargs['loop_size'][-1] < vectorlane_size:
-                w_offset = kwargs['loop_size'][-1]
-            w_offset = 0 # max(w_offset - x_offset, 0)
+            # Create TOG.
+            # offset = the cycles a compute node holds the array ENTRANCE, i.e.
+            # how long before the next node can start feeding. TOGSim turns it
+            # into SA active via overlapping_cycle = compute_cycle - offset.
+            if extension_config.systolic_dataflow == "os":
+                # Output-stationary: the array face is Sm x Sn and BOTH operands
+                # stream every K-step, so the WS proxy "array width" no longer
+                # describes what occupies the entrance. What actually does is the
+                # push count: one pass issues ceil(Sm/nr_element) vipush and
+                # ceil(Sk/nr_element) vwpush (confirmed against the instruction
+                # trace), and each push is one transfer through the entrance.
+                # Unlike WS -- where one weight tile is amortized over a long M
+                # stream -- OS reloads weights every pass, so w_offset is NOT 0.
+                _nr = max(1, extension_config.vpu_vector_length_bits // 32)
+                _sm = extension_config.systolic_array_height or vectorlane_size
+                _sk = extension_config.systolic_array_size_k or 1
+                x_offset = max(1, -(-_sm // _nr))
+                w_offset = max(1, -(-_sk // _nr))
+                if _weight_feed_is_concurrent():
+                    # Separate W and A ports: the weight feed rides its own wires,
+                    # so it does not consume the input port's bandwidth. offset=0
+                    # makes overlapping_cycle = compute_cycle (see tog_generator),
+                    # i.e. the feed keeps its full gem5-measured duration in the
+                    # trace but adds zero exclusive array time.
+                    #
+                    # Do NOT shrink compute_cycle itself to fake this. One vwpush
+                    # moves n_vu x vl elements; lanes are parallel but the vl
+                    # elements within a lane enter that lane's serializer one per
+                    # cycle, so the measured ~17 cycles is real transfer work.
+                    w_offset = 0
+            else:
+                # Weight-stationary (unchanged): entrance time is approximated by
+                # the array width, and the stationary weight tile is amortized
+                # over the M stream, so its load hides behind the input feed.
+                w_offset, x_offset = vectorlane_size, vectorlane_size
+                if kwargs['loop_size'] is not None and kwargs['loop_size'][-3] < vectorlane_size:
+                    x_offset = kwargs['loop_size'][-3]
+                if kwargs['loop_size'] is not None and kwargs['loop_size'][-1] < vectorlane_size:
+                    w_offset = kwargs['loop_size'][-1]
+                w_offset = 0 # max(w_offset - x_offset, 0)
             tile_graph_generator = tog_generator(origins)
             tile_graph_generator.load_file(raw_tog_path)
             # Now that compute-node types are known, apply the 3D (Sk) scaling to GEMM

@@ -3,14 +3,17 @@ core_freq_mhz: 940
 core_stats_print_period_cycles: 10000
 num_systolic_array_per_core: 1
 
-# ===== PE Array:  M(token) x N(output-ch) x P(input-ch) =====
-dataflow: os          # output-stationary (전 config OS 전환)
-pe_M: 128
-pe_N: 128
-pe_P: 1
+# ===== 3D OUTPUT-STATIONARY PE array =====
+# Array face is M x N: each PE(m,n) owns the accumulator for one C[m][n].
+# pe_P = Sk is the depth -- K values reduced per PE per cycle via an adder tree.
+# Both operands stream; K is tiled by Sk. Accumulate in-array over K, drain once.
+dataflow: os
+pe_M: 64     # Sm = M / token   (array height)
+pe_N: 128     # Sn = N / out-ch  (array width)
+pe_P: 4       # Sk = K depth (=nr_element, 정렬)
 
 # ===== 1D SIMD =====
-simd_K: 64
+simd_K: 128
 simd_bit: 256
 
 dram_type: ramulator2

@@ -33,3 +33,5 @@ wmem_sram_depth: 512
 omem_num_banks: 8
 omem_sram_bitwidth: 256
 omem_sram_depth: 512
+
+dataflow: os          # output-stationary (전 config OS 전환)

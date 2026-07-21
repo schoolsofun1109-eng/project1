@@ -250,11 +250,12 @@ class CycleSimulator():
                              "--spad-bank-bw-gbps", f"{_bank_bw_gbps:.4f}"]
         except Exception as _e:
             logger.debug(f"[Gem5] SRAM bank wiring skipped: {_e}")
-            # Output-stationary changes what the array does per cycle (both
-            # operands stream, outputs drain only after the K loop), so gem5
-            # needs the dataflow too -- geometry alone is not enough.
-            if extension_config.systolic_dataflow == "os":
-                gem5_cmd += ["--dataflow", "os"]
+
+        # Output-stationary changes what the array does per cycle (both
+        # operands stream, outputs drain only after the K loop), so gem5
+        # needs the dataflow too -- geometry alone is not enough.
+        if extension_config.systolic_dataflow == "os":
+            gem5_cmd += ["--dataflow", "os"]
 
         if not silent_mode:
             logger.debug(f"[Gem5] cmd> {' '.join(gem5_cmd)}")

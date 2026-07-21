@@ -134,6 +134,28 @@ def __getattr__(name):
         assert df in ("ws", "os"), f"Invalid dataflow {df!r}: expected 'ws' or 'os'"
         return df
 
+    # Whether the weight feed shares the input port. A property of the ARRAY,
+    # not of the dataflow.
+    #   "sequential" (default): the weight feed occupies the same port as the
+    #     input feed, so it is charged array-occupancy time of its own.
+    #   "concurrent": separate W and A ports, so the weight feed costs zero
+    #     exclusive array time (w_offset = 0).
+    #
+    # SCOPE -- read before using this. It changes only the UTILIZATION split,
+    # not latency: both modes keep gem5's measured weight-feed duration, and
+    # TOGSim chains the weight node ahead of the input node either way, so a
+    # pass still costs W_feed + A_feed. A real concurrent array would cost
+    # max(W_feed, A_feed); expressing that needs the TOG's weight and input
+    # nodes MERGED INTO ONE, which is not done here. So "concurrent" is not yet
+    # a faithful model of a TPU/Gemmini-style array -- it only stops
+    # double-charging the port. Values are identical in both modes (Spike
+    # computes those on its own path).
+    if name == "operand_delivery":
+        od = str(config_yaml.get("operand_delivery", "sequential")).lower()
+        assert od in ("concurrent", "sequential"), \
+            f"Invalid operand_delivery {od!r}: expected 'concurrent' or 'sequential'"
+        return od
+
     # 3D PE array: depth of the K-reduction axis (Sk).
     # Sk=1 => classic 2D systolic array (identical cycles to before).
     # Sk>1 => the K reduction is parallelized across Sk PEs, so the
